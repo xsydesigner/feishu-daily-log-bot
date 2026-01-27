@@ -38,11 +38,12 @@ PROJECTS = {
         "table_id": "你的table_id",
         "document_id": "你的document_id"
     },
-    "oc_xxx2": {
-        "name": "项目2", 
-        "app_token": "你的app_token",
-        "table_id": "你的table_id",
-        "document_id": "你的document_id"
+    # 私聊测试（BusJam项目）
+    "oc_da3f1c4b1851ee1b7e2e4e980f1dba92": {
+        "name": "BusJam",
+        "app_token": "OkR6bHCAfa3JrMst4fpcHd2SnHc",
+        "table_id": "tblA0oTFNEI9O2wm",
+        "document_id": "P80VdXVf3oFh0oxej41cIAY3nsf"
     },
 }
 
