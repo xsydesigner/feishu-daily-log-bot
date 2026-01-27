@@ -124,8 +124,9 @@ def get_accepted_requirements(project):
     """获取今日验收通过的需求"""
     client = get_client()
     
-    # 获取今天的日期字符串
-    today = datetime.now().strftime("%Y-%m-%d")
+    # 获取今天0点的时间戳(毫秒)
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_ts = int(today.timestamp() * 1000)
     
     request_body = SearchAppTableRecordRequest.builder() \
         .app_token(project["app_token"]) \
@@ -141,6 +142,8 @@ def get_accepted_requirements(project):
                         .build()
                 ])
                 .build())
+            .automatic_fields(True)  # 获取系统字段(包括修改时间)
+            .page_size(100)
             .build()) \
         .build()
     
@@ -149,22 +152,31 @@ def get_accepted_requirements(project):
         response = client.bitable.v1.app_table_record.search(request_body)
         if response.success() and response.data.items:
             for item in response.data.items:
-                fields = item.fields
-                req_name = fields.get(FIELD_REQUIREMENT, "")
-                owner = fields.get(FIELD_OWNER, "")
-                role = fields.get(FIELD_ROLE, "其他")
-                
-                # 处理负责人字段（可能是数组）
-                if isinstance(owner, list) and owner:
-                    owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
-                
-                requirements.append({
-                    "name": req_name,
-                    "owner": owner,
-                    "role": role
-                })
+                # 检查修改时间是否是今天
+                last_modified = item.last_modified_time
+                if last_modified and last_modified >= today_ts:
+                    fields = item.fields
+                    req_name = fields.get(FIELD_REQUIREMENT, "")
+                    owner = fields.get("任务执行人", "")
+                    role = fields.get("部门", "其他")
+                    
+                    # 处理人员字段
+                    if isinstance(owner, list) and owner:
+                        owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
+                    if isinstance(role, list) and role:
+                        role = role[0] if isinstance(role[0], str) else str(role[0])
+                    
+                    requirements.append({
+                        "name": req_name,
+                        "owner": str(owner),
+                        "role": str(role)
+                    })
+            
+            print(f"   筛选出今日验收: {len(requirements)} 条")
     except Exception as e:
         print(f"获取需求失败: {e}")
+        import traceback
+        traceback.print_exc()
     
     return requirements
 
