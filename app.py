@@ -131,6 +131,7 @@ def get_accepted_requirements(project):
     request_body = SearchAppTableRecordRequest.builder() \
         .app_token(project["app_token"]) \
         .table_id(project["table_id"]) \
+        .page_size(100) \
         .request_body(SearchAppTableRecordRequestBody.builder()
             .filter(FilterInfo.builder()
                 .conjunction("and")
@@ -142,8 +143,7 @@ def get_accepted_requirements(project):
                         .build()
                 ])
                 .build())
-            .automatic_fields(True)  # 获取系统字段(包括修改时间)
-            .page_size(100)
+            .automatic_fields(True)
             .build()) \
         .build()
     
@@ -160,7 +160,6 @@ def get_accepted_requirements(project):
                     owner = fields.get("任务执行人", "")
                     role = fields.get("部门", "其他")
                     
-                    # 处理人员字段
                     if isinstance(owner, list) and owner:
                         owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
                     if isinstance(role, list) and role:
