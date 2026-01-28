@@ -75,12 +75,16 @@ def get_tenant_access_token():
 
 def get_chat_messages(chat_id):
     """获取群聊今日消息"""
+    print(f"   正在获取群消息, chat_id: {chat_id}")
+    
     token = get_tenant_access_token()
     headers = {"Authorization": f"Bearer {token}"}
     
-    # 获取今天0点的时间戳
+    # 获取今天0点的时间戳（秒）
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    start_time = str(int(today.timestamp() * 1000))
+    start_time = str(int(today.timestamp()))
+    
+    print(f"   开始时间戳: {start_time}")
     
     url = f"https://open.feishu.cn/open-apis/im/v1/messages"
     params = {
@@ -95,24 +99,44 @@ def get_chat_messages(chat_id):
         resp = requests.get(url, headers=headers, params=params)
         data = resp.json()
         
+        print(f"   群消息API返回: code={data.get('code')}, msg={data.get('msg')}")
+        
         if data.get("code") == 0:
             items = data.get("data", {}).get("items", [])
+            print(f"   原始消息数: {len(items)}")
+            
             for item in items:
                 msg_type = item.get("msg_type")
-                sender_id = item.get("sender", {}).get("id", "")
+                sender = item.get("sender", {})
+                sender_id = sender.get("id", "")
+                sender_type = sender.get("sender_type", "")
+                
+                # 跳过机器人自己的消息
+                if sender_type == "app":
+                    continue
                 
                 # 只处理文本消息
                 if msg_type == "text":
-                    content = json.loads(item.get("body", {}).get("content", "{}"))
-                    text = content.get("text", "")
-                    if text and not text.startswith("@"):  # 排除@消息
-                        messages.append({
-                            "sender_id": sender_id,
-                            "text": text,
-                            "time": item.get("create_time")
-                        })
+                    body = item.get("body", {})
+                    content_str = body.get("content", "{}")
+                    try:
+                        content = json.loads(content_str)
+                        text = content.get("text", "")
+                        if text and "生成日志" not in text:
+                            messages.append({
+                                "sender_id": sender_id,
+                                "text": text
+                            })
+                            print(f"   ✓ 消息: {text[:30]}")
+                    except:
+                        pass
+        else:
+            print(f"   群消息API错误: {data}")
+            
     except Exception as e:
-        print(f"获取消息失败: {e}")
+        print(f"   获取消息异常: {e}")
+        import traceback
+        traceback.print_exc()
     
     return messages
 
@@ -497,8 +521,20 @@ def webhook():
         
         print(f"收到消息: {text}")
         
-        # 检查是否是生成日志命令
-        if "生成日志" in text or "产品日志" in text or "日报" in text:
+        # 检查是否@了机器人
+        mentions = content.get("mentions", [])
+        is_mentioned = False
+        
+        for mention in mentions:
+            # 检查是否@的是机器人（通过id.union_id或name判断）
+            mention_name = mention.get("name", "")
+            if "产品日志" in mention_name or "机器人" in mention_name:
+                is_mentioned = True
+                break
+        
+        # @机器人就触发生成日志
+        if is_mentioned:
+            print(f"检测到@机器人，触发生成日志")
             handle_generate_log(message)
         
     except Exception as e:
