@@ -136,12 +136,13 @@ def get_accepted_requirements(project):
     
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{project['app_token']}/tables/{project['table_id']}/records/search"
     
-    # 不加日期筛选，获取所有记录，在代码中筛选
     payload = {
         "page_size": 200
     }
     
     requirements = []
+    debug_count = 0
+    
     try:
         resp = requests.post(url, headers=headers, json=payload)
         data = resp.json()
@@ -158,6 +159,11 @@ def get_accepted_requirements(project):
                 start_time = fields.get("开始时间")
                 end_time = fields.get("截止时间")
                 
+                # 调试：打印前3条的日期字段原始值
+                if debug_count < 3:
+                    print(f"   调试[{req_name[:10]}]: 开始时间={start_time}(type:{type(start_time).__name__}) 截止时间={end_time}(type:{type(end_time).__name__})")
+                    debug_count += 1
+                
                 # 判断是否在今日范围内
                 is_today = False
                 
@@ -166,12 +172,11 @@ def get_accepted_requirements(project):
                         start_ts = int(start_time) if isinstance(start_time, (int, float)) else 0
                         end_ts = int(end_time) if isinstance(end_time, (int, float)) else 0
                         
-                        # 开始时间 <= 今天结束 AND 截止时间 >= 今天开始
                         if start_ts <= tomorrow_ts and end_ts >= today_ts:
                             is_today = True
-                            print(f"   ✓ [{req_name}] 在今日范围内")
-                    except:
-                        pass
+                            print(f"   ✓ [{req_name}] 匹配今日")
+                    except Exception as e:
+                        print(f"   日期转换错误: {e}")
                 
                 if is_today:
                     owner = fields.get("任务执行人", "")
@@ -420,7 +425,7 @@ def handle_generate_log(message):
         # 2. 获取验收需求
         print("📋 获取验收需求...")
         requirements = get_accepted_requirements(project)
-        print(f"   获取到 {len(requirements)} 条验收需求")
+        print(f"   获取到 {len(requirements)} 条今日需求")
         
         # 3. 调用GLM生成总结
         print("🤖 调用GLM生成总结...")
