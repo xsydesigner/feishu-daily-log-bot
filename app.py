@@ -74,7 +74,7 @@ def get_tenant_access_token():
 # ============================================================
 
 def get_chat_messages(chat_id):
-    """获取群聊今日消息"""
+    """获取群聊今日所有消息"""
     print(f"   正在获取群消息, chat_id: {chat_id}")
     
     token = get_tenant_access_token()
@@ -83,8 +83,6 @@ def get_chat_messages(chat_id):
     # 获取今天0点的时间戳（秒）
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     start_time = str(int(today.timestamp()))
-    
-    print(f"   开始时间戳: {start_time}")
     
     url = f"https://open.feishu.cn/open-apis/im/v1/messages"
     params = {
@@ -99,37 +97,51 @@ def get_chat_messages(chat_id):
         resp = requests.get(url, headers=headers, params=params)
         data = resp.json()
         
-        print(f"   群消息API返回: code={data.get('code')}, msg={data.get('msg')}")
+        print(f"   群消息API返回: code={data.get('code')}")
         
         if data.get("code") == 0:
             items = data.get("data", {}).get("items", [])
             print(f"   原始消息数: {len(items)}")
             
             for item in items:
-                msg_type = item.get("msg_type")
+                msg_type = item.get("msg_type", "")
                 sender = item.get("sender", {})
-                sender_id = sender.get("id", "")
-                sender_type = sender.get("sender_type", "")
+                sender_type = sender.get("sender_type", "user")
                 
-                # 跳过机器人自己的消息
-                if sender_type == "app":
-                    continue
+                # 获取消息内容
+                body = item.get("body", {})
+                content_str = body.get("content", "{}")
                 
-                # 只处理文本消息
-                if msg_type == "text":
-                    body = item.get("body", {})
-                    content_str = body.get("content", "{}")
-                    try:
-                        content = json.loads(content_str)
+                text = ""
+                try:
+                    content = json.loads(content_str)
+                    if msg_type == "text":
                         text = content.get("text", "")
-                        if text and "生成日志" not in text:
-                            messages.append({
-                                "sender_id": sender_id,
-                                "text": text
-                            })
-                            print(f"   ✓ 消息: {text[:30]}")
-                    except:
-                        pass
+                    elif msg_type == "post":
+                        # 富文本消息，提取文字
+                        title = content.get("title", "")
+                        text = f"[富文本]{title}"
+                    elif msg_type == "image":
+                        text = "[图片]"
+                    elif msg_type == "file":
+                        text = "[文件]"
+                    elif msg_type == "interactive":
+                        text = "[卡片消息]"
+                    else:
+                        text = f"[{msg_type}]"
+                except:
+                    text = f"[{msg_type}]"
+                
+                # 标记发送者类型
+                sender_label = "机器人" if sender_type == "app" else "用户"
+                
+                messages.append({
+                    "sender_type": sender_label,
+                    "msg_type": msg_type,
+                    "text": text
+                })
+            
+            print(f"   获取到 {len(messages)} 条消息")
         else:
             print(f"   群消息API错误: {data}")
             
@@ -226,42 +238,50 @@ def get_accepted_requirements(project):
 def call_glm_summary(messages, requirements, project_name):
     """调用智谱GLM生成日志总结"""
     
-    # 构建提示词
     today = datetime.now().strftime("%Y/%m/%d")
+    
+    # 按部门分组需求
+    grouped = {}
+    for req in requirements:
+        role = req.get("role", "其他")
+        if role not in grouped:
+            grouped[role] = []
+        grouped[role].append(req)
+    
+    # 构建需求文本
+    req_text = ""
+    for role, reqs in grouped.items():
+        req_text += f"\n【{role}】\n"
+        for r in reqs:
+            req_text += f"- {r['name']} (负责人: {r['owner']})\n"
+    
+    if not req_text:
+        req_text = "无"
     
     prompt = f"""你是一个产品日志助手。请根据以下信息，生成{project_name}的产品日志。
 
 今日日期：{today}
 
-## 今日进行中的需求：
-{json.dumps(requirements, ensure_ascii=False, indent=2) if requirements else "无"}
+## 今日需求（已按部门分组）：
+{req_text}
 
-## 今日群聊消息摘要：
-{json.dumps(messages[-30:], ensure_ascii=False, indent=2) if messages else "无消息"}
+## 今日群消息数：{len(messages)} 条
 
-请按以下格式输出日志（使用飞书文档格式）：
+请按以下格式输出日志：
 
 💡 {today}
 
-策划：@人名1 @人名2
-1. 【已完成】具体工作内容
-2. 【进行中】具体工作内容
+【部门名】：@负责人姓名
+1. 【已完成】需求内容 @负责人姓名
 
-开发：@人名
-1. 【已完成】具体工作内容
+【部门名】：@负责人姓名
+1. 【进行中】需求内容 @负责人姓名
 
-UI：@人名
-1. 【进行中】具体工作内容
-
-测试：@人名
-1. 【已完成】具体工作内容
-
-注意：
-1. 按角色/部门分组（策划、开发、UI、测试等）
-2. 根据验收状态或开发状态判断：已完成用【已完成】，未完成用【进行中】
-3. 每条需求后面加上负责人 @人名
-4. 只输出日志内容，不要其他解释
-5. 如果没有需求，输出"💡 {today}\n今日无进行中的需求" """
+要求：
+1. 严格按照上面提供的部门分组，不要自己猜测部门
+2. 如果某个部门没有需求，就不要写这个部门
+3. 每条需求一行，带上负责人
+4. 只输出日志内容，不要其他说明"""
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {
@@ -270,11 +290,11 @@ UI：@人名
     }
     
     payload = {
-        "model": "glm-4-flash",  # 使用免费模型
+        "model": "glm-4-flash",
         "messages": [
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.7
+        "temperature": 0.3
     }
     
     try:
@@ -295,7 +315,7 @@ UI：@人名
 # ============================================================
 
 def append_to_document(document_id, content):
-    """追加内容到云文档"""
+    """追加内容到云文档（使用高亮块）"""
     token = get_tenant_access_token()
     headers = {
         "Authorization": f"Bearer {token}",
@@ -304,67 +324,88 @@ def append_to_document(document_id, content):
     
     url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children"
     
-    # 构建文档块
-    lines = content.strip().split("\n")
-    blocks = []
+    today = datetime.now().strftime("%Y/%m/%d")
     
+    # 解析AI返回的内容
+    lines = content.strip().split("\n")
+    
+    # 构建高亮块内的内容
+    callout_children = []
+    
+    # 添加日期标题
+    callout_children.append({
+        "block_type": 2,
+        "text": {
+            "elements": [
+                {"text_run": {"content": f"💡 {today}"}}
+            ],
+            "style": {"bold": True}
+        }
+    })
+    
+    # 添加内容
     for line in lines:
         line = line.strip()
         if not line:
             continue
         
-        # 日期行（带💡或纯日期）作为标题
-        if "💡" in line or re.match(r"^\d{4}/\d{2}/\d{2}$", line):
-            blocks.append({
-                "block_type": 5,  # heading3
-                "heading3": {
-                    "elements": [
-                        {"text_run": {"content": line}}
-                    ]
-                }
-            })
-        # 有序列表项（1. 2. 3. 开头）
-        elif re.match(r"^\d+\.\s", line):
+        # 跳过标记行
+        if line.startswith("[") and line.endswith("]"):
+            continue
+        
+        # 有序列表项
+        if re.match(r"^\d+\.", line):
             text = re.sub(r"^\d+\.\s*", "", line)
-            blocks.append({
-                "block_type": 13,  # ordered list（修复：16改为13）
+            callout_children.append({
+                "block_type": 13,
                 "ordered": {
                     "elements": [
                         {"text_run": {"content": text}}
                     ]
                 }
             })
-        # 子列表项（a. b. c. 开头）
-        elif re.match(r"^[a-z]\.\s", line):
-            text = re.sub(r"^[a-z]\.\s*", "", line)
-            blocks.append({
-                "block_type": 12,  # bullet list（修复：15改为12）
-                "bullet": {
+        # 测试标题
+        elif line.startswith("测试"):
+            callout_children.append({
+                "block_type": 2,
+                "text": {
                     "elements": [
-                        {"text_run": {"content": "  " + text}}
+                        {"text_run": {"content": ""}}
                     ]
                 }
             })
-        # 角色标题行（策划：、开发：等）
-        elif re.match(r"^(策划|开发|UI|测试|产品|设计|运营)[:：]", line):
-            blocks.append({
-                "block_type": 2,  # text
+            callout_children.append({
+                "block_type": 2,
                 "text": {
                     "elements": [
                         {"text_run": {"content": line}}
-                    ]
+                    ],
+                    "style": {"bold": True}
                 }
             })
-        # 普通文本
+        # 普通文本（总结等）
         else:
-            blocks.append({
-                "block_type": 2,  # text
+            callout_children.append({
+                "block_type": 2,
                 "text": {
                     "elements": [
                         {"text_run": {"content": line}}
                     ]
                 }
             })
+    
+    # 构建高亮块（callout）
+    blocks = [
+        {
+            "block_type": 14,
+            "callout": {
+                "background_color": 3,  # 绿色背景
+                "border_color": 3,
+                "emoji_id": "bulb"  # 💡图标
+            },
+            "children": callout_children
+        }
+    ]
     
     try:
         resp = requests.post(url, headers=headers, json={"children": blocks})
@@ -375,11 +416,61 @@ def append_to_document(document_id, content):
             return True
         else:
             print(f"❌ 文档写入失败: {data}")
-            return False
+            # 如果高亮块失败，尝试普通写入
+            return append_to_document_simple(document_id, content, today)
+            
     except Exception as e:
         print(f"❌ 写入文档异常: {e}")
-        import traceback
-        traceback.print_exc()
+        return False
+
+
+def append_to_document_simple(document_id, content, today):
+    """简单方式写入文档（备用）"""
+    token = get_tenant_access_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children"
+    
+    lines = content.strip().split("\n")
+    blocks = []
+    
+    # 日期标题
+    blocks.append({
+        "block_type": 5,
+        "heading3": {
+            "elements": [{"text_run": {"content": f"💡 {today}"}}]
+        }
+    })
+    
+    for line in lines:
+        line = line.strip()
+        if not line or (line.startswith("[") and line.endswith("]")):
+            continue
+        
+        if re.match(r"^\d+\.", line):
+            text = re.sub(r"^\d+\.\s*", "", line)
+            blocks.append({
+                "block_type": 13,
+                "ordered": {
+                    "elements": [{"text_run": {"content": text}}]
+                }
+            })
+        else:
+            blocks.append({
+                "block_type": 2,
+                "text": {
+                    "elements": [{"text_run": {"content": line}}]
+                }
+            })
+    
+    try:
+        resp = requests.post(url, headers=headers, json={"children": blocks})
+        data = resp.json()
+        return data.get("code") == 0
+    except:
         return False
 
 # ============================================================
