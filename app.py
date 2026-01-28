@@ -121,30 +121,36 @@ def get_chat_messages(chat_id):
 # ============================================================
 
 def get_accepted_requirements(project):
-    """获取今日验收通过的需求"""
+    """获取今日进行中的需求（开始时间 <= 今天 <= 截止时间）"""
     print("   正在查询多维表格...")
     
     token = get_tenant_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
-    # 获取今天0点时间戳(毫秒)
+    # 获取今天的时间戳范围(毫秒)
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_ts = int(today.timestamp() * 1000)
+    today_start = int(today.timestamp() * 1000)  # 今天0点
+    today_end = int((today + timedelta(days=1)).timestamp() * 1000) - 1  # 今天23:59:59
     
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{project['app_token']}/tables/{project['table_id']}/records/search"
     
+    # 查询条件：开始时间 <= 今天 AND 截止时间 >= 今天
     payload = {
         "filter": {
             "conjunction": "and",
             "conditions": [
                 {
-                    "field_name": FIELD_STATUS,
-                    "operator": "is",
-                    "value": [STATUS_PASSED]
+                    "field_name": "开始时间",
+                    "operator": "isLessEqual",
+                    "value": [today_end]
+                },
+                {
+                    "field_name": "截止时间",
+                    "operator": "isGreaterEqual",
+                    "value": [today_start]
                 }
             ]
         },
-        "automatic_fields": True,
         "page_size": 100
     }
     
@@ -157,30 +163,31 @@ def get_accepted_requirements(project):
         
         if data.get("code") == 0:
             items = data.get("data", {}).get("items", [])
-            print(f"   共获取 {len(items)} 条验收通过的记录")
+            print(f"   获取到 {len(items)} 条今日进行中的需求")
             
             for item in items:
-                # 检查修改时间是否是今天
-                last_modified = item.get("last_modified_time")
-                if last_modified and last_modified >= today_ts:
-                    fields = item.get("fields", {})
-                    req_name = fields.get(FIELD_REQUIREMENT, "")
-                    owner = fields.get("任务执行人", "")
-                    role = fields.get("部门", "其他")
-                    
-                    # 处理人员字段
-                    if isinstance(owner, list) and owner:
-                        owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
-                    if isinstance(role, list) and role:
-                        role = role[0] if isinstance(role[0], str) else str(role[0])
-                    
-                    requirements.append({
-                        "name": str(req_name),
-                        "owner": str(owner),
-                        "role": str(role)
-                    })
+                fields = item.get("fields", {})
+                req_name = fields.get(FIELD_REQUIREMENT, "")
+                owner = fields.get("任务执行人", "")
+                role = fields.get("部门", "其他")
+                status = fields.get(FIELD_STATUS, "")
+                dev_status = fields.get("开发状态", "")
+                
+                # 处理人员字段
+                if isinstance(owner, list) and owner:
+                    owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
+                if isinstance(role, list) and role:
+                    role = role[0] if isinstance(role[0], str) else str(role[0])
+                
+                requirements.append({
+                    "name": str(req_name),
+                    "owner": str(owner),
+                    "role": str(role),
+                    "status": str(status) if status else "",
+                    "dev_status": str(dev_status) if dev_status else ""
+                })
             
-            print(f"   筛选出今日验收: {len(requirements)} 条")
+            print(f"   筛选完成: {len(requirements)} 条")
         else:
             print(f"   API错误: {data}")
             
@@ -205,7 +212,7 @@ def call_glm_summary(messages, requirements, project_name):
 
 今日日期：{today}
 
-## 今日验收通过的需求：
+## 今日进行中的需求：
 {json.dumps(requirements, ensure_ascii=False, indent=2) if requirements else "无"}
 
 ## 今日群聊消息摘要：
@@ -213,29 +220,27 @@ def call_glm_summary(messages, requirements, project_name):
 
 请按以下格式输出日志（使用飞书文档格式）：
 
-{today}
+💡 {today}
 
 策划：@人名1 @人名2
 1. 【已完成】具体工作内容
+2. 【进行中】具体工作内容
 
 开发：@人名
 1. 【已完成】具体工作内容
 
 UI：@人名
-1. 【已完成】具体工作内容
+1. 【进行中】具体工作内容
 
 测试：@人名
 1. 【已完成】具体工作内容
-2. 部分内容调整至后续版本修复 + 测试
-   a. 具体问题1
-   b. 具体问题2
 
 注意：
-1. 按角色分组（策划、开发、UI、测试）
-2. 已完成的任务标注【已完成】
-3. 进行中的任务直接描述
-4. 如果有bug或问题，用子列表(a.b.c.)列出
-5. 只输出日志内容，不要其他解释"""
+1. 按角色/部门分组（策划、开发、UI、测试等）
+2. 根据验收状态或开发状态判断：已完成用【已完成】，未完成用【进行中】
+3. 每条需求后面加上负责人 @人名
+4. 只输出日志内容，不要其他解释
+5. 如果没有需求，输出"💡 {today}\n今日无进行中的需求" """
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {
@@ -290,7 +295,7 @@ def append_to_document(document_id, content):
         # 日期行（带💡或纯日期）作为标题
         if "💡" in line or re.match(r"^\d{4}/\d{2}/\d{2}$", line):
             blocks.append({
-                "block_type": 4,  # heading3
+                "block_type": 5,  # heading3
                 "heading3": {
                     "elements": [
                         {"text_run": {"content": line}}
@@ -299,9 +304,9 @@ def append_to_document(document_id, content):
             })
         # 有序列表项（1. 2. 3. 开头）
         elif re.match(r"^\d+\.\s", line):
-            text = re.sub(r"^\d+\.\s*", "", line)  # 去掉序号
+            text = re.sub(r"^\d+\.\s*", "", line)
             blocks.append({
-                "block_type": 16,  # ordered list
+                "block_type": 13,  # ordered list（修复：16改为13）
                 "ordered": {
                     "elements": [
                         {"text_run": {"content": text}}
@@ -312,7 +317,7 @@ def append_to_document(document_id, content):
         elif re.match(r"^[a-z]\.\s", line):
             text = re.sub(r"^[a-z]\.\s*", "", line)
             blocks.append({
-                "block_type": 15,  # bullet list
+                "block_type": 12,  # bullet list（修复：15改为12）
                 "bullet": {
                     "elements": [
                         {"text_run": {"content": "  " + text}}
@@ -326,10 +331,7 @@ def append_to_document(document_id, content):
                 "text": {
                     "elements": [
                         {"text_run": {"content": line}}
-                    ],
-                    "style": {
-                        "bold": True
-                    }
+                    ]
                 }
             })
         # 普通文本
