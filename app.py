@@ -315,7 +315,7 @@ def call_glm_summary(messages, requirements, project_name):
 # ============================================================
 
 def append_to_document(document_id, content):
-    """追加内容到云文档（使用高亮块）"""
+    """追加内容到云文档"""
     token = get_tenant_access_token()
     headers = {
         "Authorization": f"Bearer {token}",
@@ -326,118 +326,10 @@ def append_to_document(document_id, content):
     
     today = datetime.now().strftime("%Y/%m/%d")
     
-    # 解析AI返回的内容
-    lines = content.strip().split("\n")
-    
-    # 构建高亮块内的内容
-    callout_children = []
-    
-    # 添加日期标题
-    callout_children.append({
-        "block_type": 2,
-        "text": {
-            "elements": [
-                {"text_run": {"content": f"💡 {today}"}}
-            ],
-            "style": {"bold": True}
-        }
-    })
-    
-    # 添加内容
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        
-        # 跳过标记行
-        if line.startswith("[") and line.endswith("]"):
-            continue
-        
-        # 有序列表项
-        if re.match(r"^\d+\.", line):
-            text = re.sub(r"^\d+\.\s*", "", line)
-            callout_children.append({
-                "block_type": 13,
-                "ordered": {
-                    "elements": [
-                        {"text_run": {"content": text}}
-                    ]
-                }
-            })
-        # 测试标题
-        elif line.startswith("测试"):
-            callout_children.append({
-                "block_type": 2,
-                "text": {
-                    "elements": [
-                        {"text_run": {"content": ""}}
-                    ]
-                }
-            })
-            callout_children.append({
-                "block_type": 2,
-                "text": {
-                    "elements": [
-                        {"text_run": {"content": line}}
-                    ],
-                    "style": {"bold": True}
-                }
-            })
-        # 普通文本（总结等）
-        else:
-            callout_children.append({
-                "block_type": 2,
-                "text": {
-                    "elements": [
-                        {"text_run": {"content": line}}
-                    ]
-                }
-            })
-    
-    # 构建高亮块（callout）
-    blocks = [
-        {
-            "block_type": 14,
-            "callout": {
-                "background_color": 3,  # 绿色背景
-                "border_color": 3,
-                "emoji_id": "bulb"  # 💡图标
-            },
-            "children": callout_children
-        }
-    ]
-    
-    try:
-        resp = requests.post(url, headers=headers, json={"children": blocks})
-        data = resp.json()
-        
-        if data.get("code") == 0:
-            print("✅ 文档写入成功")
-            return True
-        else:
-            print(f"❌ 文档写入失败: {data}")
-            # 如果高亮块失败，尝试普通写入
-            return append_to_document_simple(document_id, content, today)
-            
-    except Exception as e:
-        print(f"❌ 写入文档异常: {e}")
-        return False
-
-
-def append_to_document_simple(document_id, content, today):
-    """简单方式写入文档（备用）"""
-    token = get_tenant_access_token()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    
-    url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children"
-    
     lines = content.strip().split("\n")
     blocks = []
     
-    # 日期标题
+    # 日期标题（heading3）
     blocks.append({
         "block_type": 5,
         "heading3": {
@@ -447,17 +339,39 @@ def append_to_document_simple(document_id, content, today):
     
     for line in lines:
         line = line.strip()
-        if not line or (line.startswith("[") and line.endswith("]")):
+        if not line:
             continue
         
-        if re.match(r"^\d+\.", line):
-            text = re.sub(r"^\d+\.\s*", "", line)
+        # 跳过标记行
+        if line.startswith("[") and line.endswith("]"):
+            continue
+        
+        # 有序列表项（1. 2. 3.）
+        if re.match(r"^\d+[\.\、]", line):
+            text = re.sub(r"^\d+[\.\、]\s*", "", line)
             blocks.append({
                 "block_type": 13,
                 "ordered": {
                     "elements": [{"text_run": {"content": text}}]
                 }
             })
+        # 测试标题行
+        elif line.startswith("测试") or line.startswith("测试："):
+            # 空行
+            blocks.append({
+                "block_type": 2,
+                "text": {
+                    "elements": [{"text_run": {"content": ""}}]
+                }
+            })
+            # 测试标题
+            blocks.append({
+                "block_type": 2,
+                "text": {
+                    "elements": [{"text_run": {"content": line}}]
+                }
+            })
+        # 普通文本
         else:
             blocks.append({
                 "block_type": 2,
@@ -469,8 +383,18 @@ def append_to_document_simple(document_id, content, today):
     try:
         resp = requests.post(url, headers=headers, json={"children": blocks})
         data = resp.json()
-        return data.get("code") == 0
-    except:
+        
+        if data.get("code") == 0:
+            print("✅ 文档写入成功")
+            return True
+        else:
+            print(f"❌ 文档写入失败: {data}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ 写入文档异常: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 # ============================================================
