@@ -521,14 +521,16 @@ def webhook():
         
         print(f"收到消息: {text}")
         
-        # 检查是否@了机器人
-        mentions = content.get("mentions", [])
-        is_mentioned = False
+        # mentions 在 message 层级
+        mentions = message.get("mentions", [])
+        print(f"mentions: {mentions}")
         
+        is_mentioned = False
         for mention in mentions:
-            # 检查是否@的是机器人（通过id.union_id或name判断）
             mention_name = mention.get("name", "")
-            if "产品日志" in mention_name or "机器人" in mention_name:
+            mention_key = mention.get("key", "")
+            print(f"检查mention: name={mention_name}, key={mention_key}")
+            if "产品日志" in mention_name:
                 is_mentioned = True
                 break
         
