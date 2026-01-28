@@ -121,27 +121,30 @@ def get_chat_messages(chat_id):
 # ============================================================
 
 def get_accepted_requirements(project):
-    """获取今日进行中的需求（开始时间 <= 今天 <= 截止时间）"""
+    """获取今日进行中的需求"""
     print("   正在查询多维表格...")
     
     token = get_tenant_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
-    # 获取今天日期时间戳
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_ts = int(today.timestamp() * 1000)
-    tomorrow_ts = int((today + timedelta(days=1)).timestamp() * 1000)
-    
-    print(f"   今天时间戳范围: {today_ts} ~ {tomorrow_ts}")
-    
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{project['app_token']}/tables/{project['table_id']}/records/search"
     
+    # 只筛选"是否今日任务"="是"的记录
     payload = {
-        "page_size": 500
+        "filter": {
+            "conjunction": "and",
+            "conditions": [
+                {
+                    "field_name": "是否今日任务",
+                    "operator": "is",
+                    "value": ["是"]
+                }
+            ]
+        },
+        "page_size": 100
     }
     
     requirements = []
-    matched_count = 0
     
     try:
         resp = requests.post(url, headers=headers, json=payload)
@@ -151,7 +154,7 @@ def get_accepted_requirements(project):
         
         if data.get("code") == 0:
             items = data.get("data", {}).get("items", [])
-            print(f"   共获取 {len(items)} 条记录")
+            print(f"   获取到 {len(items)} 条今日需求")
             
             for item in items:
                 fields = item.get("fields", {})
@@ -159,49 +162,29 @@ def get_accepted_requirements(project):
                 # 处理需求内容字段（可能是富文本格式）
                 req_name_raw = fields.get(FIELD_REQUIREMENT, "")
                 if isinstance(req_name_raw, list):
-                    # 富文本格式：[{'text': '内容', 'type': 'text'}]
                     req_name = "".join([t.get("text", "") for t in req_name_raw if isinstance(t, dict)])
                 else:
                     req_name = str(req_name_raw)
                 
-                start_time = fields.get("开始时间")
-                end_time = fields.get("截止时间")
+                owner = fields.get("任务执行人", "")
+                role = fields.get("部门", "其他")
+                status = fields.get(FIELD_STATUS, "")
+                dev_status = fields.get("开发状态", "")
                 
-                # 判断是否在今日范围内
-                is_today = False
+                if isinstance(owner, list) and owner:
+                    owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
+                if isinstance(role, list) and role:
+                    role = role[0] if isinstance(role[0], str) else str(role[0])
                 
-                if start_time is not None and end_time is not None:
-                    try:
-                        start_ts = int(start_time) if isinstance(start_time, (int, float)) else 0
-                        end_ts = int(end_time) if isinstance(end_time, (int, float)) else 0
-                        
-                        if start_ts <= tomorrow_ts and end_ts >= today_ts:
-                            is_today = True
-                            matched_count += 1
-                            print(f"   ✓ 匹配[{matched_count}]: {req_name[:20]} (开始:{start_ts} 截止:{end_ts})")
-                    except Exception as e:
-                        pass
+                requirements.append({
+                    "name": req_name,
+                    "owner": str(owner),
+                    "role": str(role),
+                    "status": str(status) if status else "",
+                    "dev_status": str(dev_status) if dev_status else ""
+                })
                 
-                if is_today:
-                    owner = fields.get("任务执行人", "")
-                    role = fields.get("部门", "其他")
-                    status = fields.get(FIELD_STATUS, "")
-                    dev_status = fields.get("开发状态", "")
-                    
-                    if isinstance(owner, list) and owner:
-                        owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
-                    if isinstance(role, list) and role:
-                        role = role[0] if isinstance(role[0], str) else str(role[0])
-                    
-                    requirements.append({
-                        "name": req_name,
-                        "owner": str(owner),
-                        "role": str(role),
-                        "status": str(status) if status else "",
-                        "dev_status": str(dev_status) if dev_status else ""
-                    })
-            
-            print(f"   筛选出今日需求: {len(requirements)} 条")
+                print(f"   ✓ {req_name[:20]}")
         else:
             print(f"   API错误: {data}")
             
