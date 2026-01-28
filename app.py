@@ -39,7 +39,7 @@ PROJECTS = {
         "document_id": "你的document_id"
     },
     # 私聊测试（BusJam项目）
-    "oc_da3f1c4b1851ee1b7e2e4e980f1dba92": {
+    "oc_c837780ca61da27e17d98d55bca4c83f": {
         "name": "BusJam",
         "app_token": "OkR6bHCAfa3JrMst4fpcHd2SnHc",
         "table_id": "tblA0oTFNEI9O2wm",
