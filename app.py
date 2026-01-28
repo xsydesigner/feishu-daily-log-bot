@@ -137,11 +137,11 @@ def get_accepted_requirements(project):
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{project['app_token']}/tables/{project['table_id']}/records/search"
     
     payload = {
-        "page_size": 200
+        "page_size": 500
     }
     
     requirements = []
-    debug_count = 0
+    matched_count = 0
     
     try:
         resp = requests.post(url, headers=headers, json=payload)
@@ -155,14 +155,17 @@ def get_accepted_requirements(project):
             
             for item in items:
                 fields = item.get("fields", {})
-                req_name = fields.get(FIELD_REQUIREMENT, "")
+                
+                # 处理需求内容字段（可能是富文本格式）
+                req_name_raw = fields.get(FIELD_REQUIREMENT, "")
+                if isinstance(req_name_raw, list):
+                    # 富文本格式：[{'text': '内容', 'type': 'text'}]
+                    req_name = "".join([t.get("text", "") for t in req_name_raw if isinstance(t, dict)])
+                else:
+                    req_name = str(req_name_raw)
+                
                 start_time = fields.get("开始时间")
                 end_time = fields.get("截止时间")
-                
-                # 调试：打印前3条的日期字段原始值
-                if debug_count < 3:
-                    print(f"   调试[{req_name[:10]}]: 开始时间={start_time}(type:{type(start_time).__name__}) 截止时间={end_time}(type:{type(end_time).__name__})")
-                    debug_count += 1
                 
                 # 判断是否在今日范围内
                 is_today = False
@@ -174,9 +177,10 @@ def get_accepted_requirements(project):
                         
                         if start_ts <= tomorrow_ts and end_ts >= today_ts:
                             is_today = True
-                            print(f"   ✓ [{req_name}] 匹配今日")
+                            matched_count += 1
+                            print(f"   ✓ 匹配[{matched_count}]: {req_name[:20]} (开始:{start_ts} 截止:{end_ts})")
                     except Exception as e:
-                        print(f"   日期转换错误: {e}")
+                        pass
                 
                 if is_today:
                     owner = fields.get("任务执行人", "")
@@ -190,7 +194,7 @@ def get_accepted_requirements(project):
                         role = role[0] if isinstance(role[0], str) else str(role[0])
                     
                     requirements.append({
-                        "name": str(req_name),
+                        "name": req_name,
                         "owner": str(owner),
                         "role": str(role),
                         "status": str(status) if status else "",
