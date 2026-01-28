@@ -122,58 +122,70 @@ def get_chat_messages(chat_id):
 
 def get_accepted_requirements(project):
     """获取今日验收通过的需求"""
-    client = get_client()
+    print("   正在查询多维表格...")
     
-    # 获取今天0点的时间戳(毫秒)
+    token = get_tenant_access_token()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    
+    # 获取今天0点时间戳(毫秒)
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_ts = int(today.timestamp() * 1000)
     
-    request_body = SearchAppTableRecordRequest.builder() \
-        .app_token(project["app_token"]) \
-        .table_id(project["table_id"]) \
-        .page_size(100) \
-        .request_body(SearchAppTableRecordRequestBody.builder()
-            .filter(FilterInfo.builder()
-                .conjunction("and")
-                .conditions([
-                    Condition.builder()
-                        .field_name(FIELD_STATUS)
-                        .operator("is")
-                        .value([STATUS_PASSED])
-                        .build()
-                ])
-                .build())
-            .automatic_fields(True)
-            .build()) \
-        .build()
+    url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{project['app_token']}/tables/{project['table_id']}/records/search"
+    
+    payload = {
+        "filter": {
+            "conjunction": "and",
+            "conditions": [
+                {
+                    "field_name": FIELD_STATUS,
+                    "operator": "is",
+                    "value": [STATUS_PASSED]
+                }
+            ]
+        },
+        "automatic_fields": True,
+        "page_size": 100
+    }
     
     requirements = []
     try:
-        response = client.bitable.v1.app_table_record.search(request_body)
-        if response.success() and response.data.items:
-            for item in response.data.items:
+        resp = requests.post(url, headers=headers, json=payload)
+        data = resp.json()
+        
+        print(f"   API返回: code={data.get('code')}")
+        
+        if data.get("code") == 0:
+            items = data.get("data", {}).get("items", [])
+            print(f"   共获取 {len(items)} 条验收通过的记录")
+            
+            for item in items:
                 # 检查修改时间是否是今天
-                last_modified = item.last_modified_time
+                last_modified = item.get("last_modified_time")
                 if last_modified and last_modified >= today_ts:
-                    fields = item.fields
+                    fields = item.get("fields", {})
                     req_name = fields.get(FIELD_REQUIREMENT, "")
                     owner = fields.get("任务执行人", "")
                     role = fields.get("部门", "其他")
                     
+                    # 处理人员字段
                     if isinstance(owner, list) and owner:
                         owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
                     if isinstance(role, list) and role:
                         role = role[0] if isinstance(role[0], str) else str(role[0])
                     
                     requirements.append({
-                        "name": req_name,
+                        "name": str(req_name),
                         "owner": str(owner),
                         "role": str(role)
                     })
             
             print(f"   筛选出今日验收: {len(requirements)} 条")
+        else:
+            print(f"   API错误: {data}")
+            
     except Exception as e:
-        print(f"获取需求失败: {e}")
+        print(f"   获取需求异常: {e}")
         import traceback
         traceback.print_exc()
     
@@ -253,7 +265,7 @@ UI：@人名
         return None
 
 # ============================================================
-# 写入飞书云文档
+# 写入飞书云文档（已修复）
 # ============================================================
 
 def append_to_document(document_id, content):
@@ -264,47 +276,75 @@ def append_to_document(document_id, content):
         "Content-Type": "application/json"
     }
     
-    # 先获取文档末尾的位置
     url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children"
     
     # 构建文档块
-    # 将内容按行分割，创建文本块
     lines = content.strip().split("\n")
     blocks = []
     
-    # 添加分隔线
-    blocks.append({
-        "block_type": 22,  # 分隔线
-        "divider": {}
-    })
-    
     for line in lines:
-        if line.strip():
-            # 判断是否是标题（日期行）
-            if re.match(r"^\d{4}/\d{2}/\d{2}", line.strip()):
-                blocks.append({
-                    "block_type": 3,  # 标题2
-                    "heading2": {
-                        "elements": [{
-                            "text_run": {"content": line.strip()}
-                        }]
+        line = line.strip()
+        if not line:
+            continue
+        
+        # 日期行（带💡或纯日期）作为标题
+        if "💡" in line or re.match(r"^\d{4}/\d{2}/\d{2}$", line):
+            blocks.append({
+                "block_type": 4,  # heading3
+                "heading3": {
+                    "elements": [
+                        {"text_run": {"content": line}}
+                    ]
+                }
+            })
+        # 有序列表项（1. 2. 3. 开头）
+        elif re.match(r"^\d+\.\s", line):
+            text = re.sub(r"^\d+\.\s*", "", line)  # 去掉序号
+            blocks.append({
+                "block_type": 16,  # ordered list
+                "ordered": {
+                    "elements": [
+                        {"text_run": {"content": text}}
+                    ]
+                }
+            })
+        # 子列表项（a. b. c. 开头）
+        elif re.match(r"^[a-z]\.\s", line):
+            text = re.sub(r"^[a-z]\.\s*", "", line)
+            blocks.append({
+                "block_type": 15,  # bullet list
+                "bullet": {
+                    "elements": [
+                        {"text_run": {"content": "  " + text}}
+                    ]
+                }
+            })
+        # 角色标题行（策划：、开发：等）
+        elif re.match(r"^(策划|开发|UI|测试|产品|设计|运营)[:：]", line):
+            blocks.append({
+                "block_type": 2,  # text
+                "text": {
+                    "elements": [
+                        {"text_run": {"content": line}}
+                    ],
+                    "style": {
+                        "bold": True
                     }
-                })
-            else:
-                blocks.append({
-                    "block_type": 2,  # 普通文本
-                    "text": {
-                        "elements": [{
-                            "text_run": {"content": line}
-                        }]
-                    }
-                })
+                }
+            })
+        # 普通文本
+        else:
+            blocks.append({
+                "block_type": 2,  # text
+                "text": {
+                    "elements": [
+                        {"text_run": {"content": line}}
+                    ]
+                }
+            })
     
     try:
-        resp = requests.post(url, headers=headers, json={
-            "children": blocks,
-            "index": -1  # 追加到末尾
-        })
+        resp = requests.post(url, headers=headers, json={"children": blocks})
         data = resp.json()
         
         if data.get("code") == 0:
@@ -315,6 +355,8 @@ def append_to_document(document_id, content):
             return False
     except Exception as e:
         print(f"❌ 写入文档异常: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 # ============================================================
@@ -388,7 +430,7 @@ def handle_generate_log(message):
         success = append_to_document(project["document_id"], summary)
         
         if success:
-            doc_url = f"https://your-company.feishu.cn/docx/{project['document_id']}"
+            doc_url = f"https://rfc9wxlr7c.feishu.cn/docx/{project['document_id']}"
             reply_message(message_id, 
                 f"✅ {project['name']} 产品日志已生成！\n\n"
                 f"📊 数据来源：\n"
