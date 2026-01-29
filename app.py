@@ -185,7 +185,7 @@ def get_chat_messages(chat_id):
 # ============================================================
 
 def get_accepted_requirements(project):
-    """获取今日需求（区分进行中和已完成）"""
+    """获取今日相关的需求（进行中 + 今日完成）"""
     print("   正在查询多维表格...")
     
     token = get_tenant_access_token()
@@ -195,6 +195,8 @@ def get_accepted_requirements(project):
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_ts = int(today.timestamp() * 1000)
     tomorrow_ts = int((today + timedelta(days=1)).timestamp() * 1000)
+    
+    print(f"   今天时间戳: {today_ts}")
     
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{project['app_token']}/tables/{project['table_id']}/records/search"
     
@@ -222,45 +224,46 @@ def get_accepted_requirements(project):
         
         if data.get("code") == 0:
             items = data.get("data", {}).get("items", [])
-            print(f"   获取到 {len(items)} 条今日需求")
+            print(f"   获取到 {len(items)} 条今日任务")
             
             for item in items:
                 fields = item.get("fields", {})
                 
-                # 处理需求内容字段
+                # 处理需求内容
                 req_name_raw = fields.get(FIELD_REQUIREMENT, "")
                 if isinstance(req_name_raw, list):
                     req_name = "".join([t.get("text", "") for t in req_name_raw if isinstance(t, dict)])
                 else:
                     req_name = str(req_name_raw)
                 
-                owner = fields.get("任务执行人", "")
-                role = fields.get("部门", "其他")
+                # 获取时间
                 start_time = fields.get("开始时间")
                 end_time = fields.get("截止时间")
+                
+                # 判断状态：进行中 or 已完成
+                # 进行中：开始时间 <= 今日，截止时间 > 今日
+                # 已完成：截止时间 <= 今日
+                task_status = "进行中"
+                if end_time and isinstance(end_time, (int, float)):
+                    if end_time < tomorrow_ts:
+                        task_status = "已完成"
+                
+                owner = fields.get("任务执行人", "")
+                role = fields.get("部门", "其他")
                 
                 if isinstance(owner, list) and owner:
                     owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
                 if isinstance(role, list) and role:
                     role = role[0] if isinstance(role[0], str) else str(role[0])
                 
-                # 判断状态：进行中 or 已完成
-                # 进行中：开始时间 <= 今天 且 截止时间 > 今天
-                # 已完成：截止时间 = 今天
-                status = "进行中"
-                if end_time:
-                    end_ts = int(end_time) if isinstance(end_time, (int, float)) else 0
-                    if end_ts < tomorrow_ts:  # 截止时间是今天
-                        status = "已完成"
-                
                 requirements.append({
                     "name": req_name,
                     "owner": str(owner),
                     "role": str(role),
-                    "status": status
+                    "task_status": task_status
                 })
                 
-                print(f"   ✓ [{status}] {req_name[:20]}")
+                print(f"   ✓ [{task_status}] {req_name[:20]}")
         else:
             print(f"   API错误: {data}")
             
@@ -281,28 +284,22 @@ def call_glm_summary(messages, requirements, project_name):
     today = datetime.now().strftime("%Y/%m/%d")
     
     # 分离进行中和已完成的需求
-    in_progress = [r for r in requirements if r.get("status") == "进行中"]
-    completed = [r for r in requirements if r.get("status") == "已完成"]
+    in_progress = [r for r in requirements if r.get("task_status") == "进行中"]
+    completed = [r for r in requirements if r.get("task_status") == "已完成"]
     
     # 构建需求文本
-    req_text = ""
-    if completed:
-        req_text += "【已完成的需求】\n"
-        for r in completed:
-            req_text += f"- {r['name']} @{r['owner']} (部门:{r['role']})\n"
+    in_progress_text = ""
+    for r in in_progress:
+        in_progress_text += f"- {r['name']} @{r['owner']} (部门:{r['role']})\n"
     
-    if in_progress:
-        req_text += "\n【进行中的需求】\n"
-        for r in in_progress:
-            req_text += f"- {r['name']} @{r['owner']} (部门:{r['role']})\n"
-    
-    if not req_text:
-        req_text = "无需求"
+    completed_text = ""
+    for r in completed:
+        completed_text += f"- {r['name']} @{r['owner']} (部门:{r['role']})\n"
     
     # 构建群消息文本
     msg_text = ""
     for m in messages[-50:]:
-        text = m.get('text', '')
+        text = m.get("text", "")
         if text and len(text) > 5:
             msg_text += f"- {text}\n"
     
@@ -310,33 +307,40 @@ def call_glm_summary(messages, requirements, project_name):
 
 今日日期：{today}
 
-## 需求列表：
-{req_text}
+## 进行中的需求（截止时间在今天之后）：
+{in_progress_text if in_progress_text else "无"}
 
-## 今日群消息：
+## 今日完成的需求（截止时间是今天）：
+{completed_text if completed_text else "无"}
+
+## 今日群消息（用于分析进度）：
 {msg_text if msg_text else "无消息"}
 
-请按以下格式输出：
+请按以下格式输出日志：
+
+今日进度总结：（1-2句话概括今日整体进度）
 
 【已完成】
-1. 【已完成】需求内容1 @负责人
-2. 【已完成】需求内容2 @负责人
+1. 需求名称 @负责人
+2. 需求名称 @负责人
 
 【进行中】
-1. 【进行中】需求内容1 @负责人 - 进度描述
-2. 【进行中】需求内容2 @负责人 - 进度描述
+1. 需求名称 @负责人 - 进度描述
+2. 需求名称 @负责人 - 进度描述
 
 测试：
-1. 从群消息中提取测试相关进度
+1. 从群消息中分析测试相关进度
 
 要求：
-1. 已完成的需求直接列出，格式：【已完成】需求内容 @负责人
-2. 进行中的需求，根据群消息分析当前进度，格式：【进行中】需求内容 @负责人 - 进度描述
-3. 进度描述要具体，比如"UI给出初版方案"、"程序完成核心功能"、"测试跑测50%"等
-4. 如果群消息中没有相关进度信息，就写"进度待更新"
-5. 测试部分从群消息中提取，如果没有就写"今日无测试进度"
-6. 不要输出【已完成】【进行中】这两个分类标题，直接输出内容
-7. 不要一句话总结"""
+1. 【已完成】部分直接列出今日完成的需求
+2. 【进行中】部分需要结合群消息分析每个需求的当前进度，例如：
+   - UI给出了初版方案
+   - 程序完成了核心功能
+   - 测试跑测完成50%
+3. 测试部分从群消息中提取测试相关的进度信息
+4. 如果群消息中没有某个需求的进度信息，写"进度待更新"
+5. 不要输出【已完成】【进行中】这些标题，直接输出内容
+6. 每条需求一行，带上负责人"""
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {
@@ -358,7 +362,7 @@ def call_glm_summary(messages, requirements, project_name):
         
         if "choices" in data:
             result = data["choices"][0]["message"]["content"]
-            print(f"   GLM返回:\n{result}")
+            print(f"   GLM返回:\n{result[:300]}...")
             return result
         else:
             print(f"GLM返回错误: {data}")
