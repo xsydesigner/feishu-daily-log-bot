@@ -268,48 +268,58 @@ def call_glm_summary(messages, requirements, project_name):
     
     today = datetime.now().strftime("%Y/%m/%d")
     
-    # 按部门分组需求
-    grouped = {}
-    for req in requirements:
-        role = req.get("role", "其他")
-        if role not in grouped:
-            grouped[role] = []
-        grouped[role].append(req)
-    
     # 构建需求文本
     req_text = ""
-    for role, reqs in grouped.items():
-        req_text += f"\n【{role}】\n"
-        for r in reqs:
-            req_text += f"- {r['name']} (负责人: {r['owner']})\n"
+    for i, req in enumerate(requirements, 1):
+        status = "已完成" if req.get("status") == "验收通过" or req.get("dev_status") == "已完成" else "进行中"
+        req_text += f"{i}. [{status}] {req['name']} @{req['owner']}\n"
     
     if not req_text:
-        req_text = "无"
+        req_text = "无需求"
     
-    prompt = f"""你是一个产品日志助手。请根据以下信息，生成{project_name}的产品日志。
+    # 构建群消息文本
+    msg_text = ""
+    for m in messages[-50:]:
+        text = m.get('text', '')
+        if text and len(text) > 2:
+            msg_text += f"- {text}\n"
+    
+    if not msg_text:
+        msg_text = "无消息"
+    
+    prompt = f"""你是{project_name}项目的产品日志助手。请根据以下信息生成今日产品日志。
 
-今日日期：{today}
+## 今日日期
+{today}
 
-## 今日需求（已按部门分组）：
+## 今日需求列表
 {req_text}
 
-## 今日群消息数：{len(messages)} 条
+## 今日群聊消息
+{msg_text}
 
-请按以下格式输出日志：
+## 输出要求
 
-💡 {today}
+请严格按以下格式输出：
 
-【部门名】：@负责人姓名
-1. 【已完成】需求内容 @负责人姓名
+第一行：用1-2句话总结今日项目整体进度（从群消息和需求中提炼）
 
-【部门名】：@负责人姓名
-1. 【进行中】需求内容 @负责人姓名
+第二行开始：列出所有需求
+1. 【已完成/进行中】需求内容 @负责人
+2. 【已完成/进行中】需求内容 @负责人
 
-要求：
-1. 严格按照上面提供的部门分组，不要自己猜测部门
-2. 如果某个部门没有需求，就不要写这个部门
-3. 每条需求一行，带上负责人
-4. 只输出日志内容，不要其他说明"""
+最后：如果群消息中有测试相关内容，添加测试总结
+测试：
+1. 测试进度内容
+2. 测试进度内容
+
+## 注意事项
+1. 总结要简洁，不超过2句话
+2. 需求列表保持原有内容，只调整格式
+3. 从群消息中提取测试相关信息（如：用例、bug、跑测等）
+4. 如果没有测试相关消息，测试部分写"暂无测试进度更新"
+5. 不要输出任何标记如[SUMMARY]等
+6. 不要按部门分组，所有需求放一起"""
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {
@@ -326,11 +336,16 @@ def call_glm_summary(messages, requirements, project_name):
     }
     
     try:
+        print(f"   发送给AI的需求: {len(requirements)} 条")
+        print(f"   发送给AI的消息: {len(messages)} 条")
+        
         resp = requests.post(url, headers=headers, json=payload, timeout=60)
         data = resp.json()
         
         if "choices" in data:
-            return data["choices"][0]["message"]["content"]
+            result = data["choices"][0]["message"]["content"]
+            print(f"   GLM返回:\n{result}")
+            return result
         else:
             print(f"GLM返回错误: {data}")
             return None
@@ -343,7 +358,129 @@ def call_glm_summary(messages, requirements, project_name):
 # ============================================================
 
 def append_to_document(document_id, content):
-    """追加内容到云文档"""
+    """追加内容到云文档（高亮块格式）"""
+    token = get_tenant_access_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    base_url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks"
+    
+    today = datetime.now().strftime("%Y/%m/%d")
+    
+    try:
+        # 第一步：创建空的高亮块
+        create_url = f"{base_url}/{document_id}/children"
+        callout_block = {
+            "children": [
+                {
+                    "block_type": 14,
+                    "callout": {
+                        "background_color": 3,
+                        "border_color": 3,
+                        "emoji_id": "bulb"
+                    }
+                }
+            ]
+        }
+        
+        resp = requests.post(create_url, headers=headers, json=callout_block)
+        data = resp.json()
+        
+        if data.get("code") != 0:
+            print(f"❌ 创建高亮块失败: {data}")
+            return append_to_document_simple(document_id, content, today)
+        
+        # 获取高亮块的ID
+        callout_id = data.get("data", {}).get("children", [{}])[0].get("block_id")
+        if not callout_id:
+            print("❌ 获取高亮块ID失败")
+            return append_to_document_simple(document_id, content, today)
+        
+        print(f"   创建高亮块成功: {callout_id}")
+        
+        # 第二步：在高亮块内添加内容
+        content_url = f"{base_url}/{callout_id}/children"
+        
+        lines = content.strip().split("\n")
+        blocks = []
+        
+        # 日期标题
+        blocks.append({
+            "block_type": 2,
+            "text": {
+                "elements": [
+                    {"text_run": {"content": f"💡 {today}", "text_element_style": {"bold": True}}}
+                ]
+            }
+        })
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 跳过重复的日期行和标记行
+            if line.startswith("💡") or line.startswith("🔸") or (line.startswith("[") and line.endswith("]")):
+                continue
+            if re.match(r"^\d{4}/\d{2}/\d{2}$", line):
+                continue
+            
+            # 有序列表项
+            if re.match(r"^\d+[\.\、]", line):
+                text = re.sub(r"^\d+[\.\、]\s*", "", line)
+                blocks.append({
+                    "block_type": 13,
+                    "ordered": {
+                        "elements": [{"text_run": {"content": text}}]
+                    }
+                })
+            # 子列表项（a. b. c.）
+            elif re.match(r"^[a-z][\.\、]", line):
+                text = re.sub(r"^[a-z][\.\、]\s*", "", line)
+                blocks.append({
+                    "block_type": 12,
+                    "bullet": {
+                        "elements": [{"text_run": {"content": "   " + text}}]
+                    }
+                })
+            # 分类标题（测试：、【其他】等）
+            elif line.startswith("测试") or line.startswith("【"):
+                blocks.append({
+                    "block_type": 2,
+                    "text": {
+                        "elements": [{"text_run": {"content": line, "text_element_style": {"bold": True}}}]
+                    }
+                })
+            # 普通文本
+            else:
+                blocks.append({
+                    "block_type": 2,
+                    "text": {
+                        "elements": [{"text_run": {"content": line}}]
+                    }
+                })
+        
+        resp = requests.post(content_url, headers=headers, json={"children": blocks})
+        data = resp.json()
+        
+        if data.get("code") == 0:
+            print("✅ 文档写入成功")
+            return True
+        else:
+            print(f"❌ 写入内容失败: {data}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ 写入文档异常: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def append_to_document_simple(document_id, content, today):
+    """备用：普通格式写入"""
     token = get_tenant_access_token()
     headers = {
         "Authorization": f"Bearer {token}",
@@ -352,12 +489,9 @@ def append_to_document(document_id, content):
     
     url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children"
     
-    today = datetime.now().strftime("%Y/%m/%d")
-    
     lines = content.strip().split("\n")
     blocks = []
     
-    # 日期标题（heading3）
     blocks.append({
         "block_type": 5,
         "heading3": {
@@ -367,14 +501,11 @@ def append_to_document(document_id, content):
     
     for line in lines:
         line = line.strip()
-        if not line:
+        if not line or line.startswith("💡") or line.startswith("🔸"):
+            continue
+        if re.match(r"^\d{4}/\d{2}/\d{2}$", line):
             continue
         
-        # 跳过标记行
-        if line.startswith("[") and line.endswith("]"):
-            continue
-        
-        # 有序列表项（1. 2. 3.）
         if re.match(r"^\d+[\.\、]", line):
             text = re.sub(r"^\d+[\.\、]\s*", "", line)
             blocks.append({
@@ -383,23 +514,6 @@ def append_to_document(document_id, content):
                     "elements": [{"text_run": {"content": text}}]
                 }
             })
-        # 测试标题行
-        elif line.startswith("测试") or line.startswith("测试："):
-            # 空行
-            blocks.append({
-                "block_type": 2,
-                "text": {
-                    "elements": [{"text_run": {"content": ""}}]
-                }
-            })
-            # 测试标题
-            blocks.append({
-                "block_type": 2,
-                "text": {
-                    "elements": [{"text_run": {"content": line}}]
-                }
-            })
-        # 普通文本
         else:
             blocks.append({
                 "block_type": 2,
@@ -410,19 +524,8 @@ def append_to_document(document_id, content):
     
     try:
         resp = requests.post(url, headers=headers, json={"children": blocks})
-        data = resp.json()
-        
-        if data.get("code") == 0:
-            print("✅ 文档写入成功")
-            return True
-        else:
-            print(f"❌ 文档写入失败: {data}")
-            return False
-            
-    except Exception as e:
-        print(f"❌ 写入文档异常: {e}")
-        import traceback
-        traceback.print_exc()
+        return resp.json().get("code") == 0
+    except:
         return False
 
 # ============================================================
