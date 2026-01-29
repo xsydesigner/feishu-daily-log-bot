@@ -296,29 +296,37 @@ def call_glm_summary(messages, requirements, project_name):
     for r in completed:
         completed_text += f"- {r['name']} @{r['owner']} (部门:{r['role']})\n"
     
-    # 构建群消息文本
+    # 构建群消息文本 - 过滤机器人消息
     msg_text = ""
     for m in messages[-50:]:
+        # 跳过机器人发送的消息
+        if m.get("sender_type") == "机器人":
+            continue
         text = m.get("text", "")
         if text and len(text) > 5:
+            # 过滤机器人相关内容
+            if "产品日志" in text or "正在生成" in text or "已生成" in text:
+                continue
             msg_text += f"- {text}\n"
     
     prompt = f"""你是一个产品日志助手。请根据以下信息，生成{project_name}的产品日志。
 
 今日日期：{today}
 
-## 进行中的需求（截止时间在今天之后）：
-{in_progress_text if in_progress_text else "无"}
+## 【重要】以下是今日需求列表（来自多维表格，你只能使用这些需求）：
 
-## 今日完成的需求（截止时间是今天）：
+### 已完成的需求：
 {completed_text if completed_text else "无"}
 
-## 今日群消息（用于分析进度）：
+### 进行中的需求：
+{in_progress_text if in_progress_text else "无"}
+
+## 今日群消息（仅用于分析上述需求的进度，禁止从中提取新需求）：
 {msg_text if msg_text else "无消息"}
 
-请按以下格式输出日志：
+请严格按以下格式输出：
 
-今日进度总结：（1-2句话概括今日整体进度）
+今日进度总结：（1句话概括今日整体进度）
 
 【已完成】
 1. 需求名称 @负责人
@@ -329,18 +337,16 @@ def call_glm_summary(messages, requirements, project_name):
 2. 需求名称 @负责人 - 进度描述
 
 测试：
-1. 从群消息中分析测试相关进度
+1. 测试相关进度
 
-要求：
-1. 【已完成】部分直接列出今日完成的需求
-2. 【进行中】部分需要结合群消息分析每个需求的当前进度，例如：
-   - UI给出了初版方案
-   - 程序完成了核心功能
-   - 测试跑测完成50%
-3. 测试部分从群消息中提取测试相关的进度信息
-4. 如果群消息中没有某个需求的进度信息，写"进度待更新"
-5. 不要输出【已完成】【进行中】这些标题，直接输出内容
-6. 每条需求一行，带上负责人"""
+⚠️ 严格要求（必须遵守）：
+1. 【已完成】只能列出上面"已完成的需求"中的内容，不能添加其他内容
+2. 【进行中】只能列出上面"进行中的需求"中的内容，不能添加其他内容
+3. 禁止从群消息中创造或提取新的需求
+4. 群消息仅用于分析已有需求的进度详情
+5. 如果群消息中没有某需求的进度信息，写"进度待更新"
+6. 如果已完成或进行中的需求为空，对应部分写"无"
+7. 不要包含任何机器人发送的消息内容"""
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {
