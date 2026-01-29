@@ -31,39 +31,23 @@ STATUS_PASSED = "验收通过"
 
 # 项目配置（根据chat_id匹配项目）
 PROJECTS = {
-    # chat_id: 项目配置
+    # JigArt项目
     "oc_": {
         "name": "JigArt",
         "app_token": "Q8BWbvdpja9RzEsFXbjcXEy3nof",
         "table_id": "tbluv9XFW2P6B7sn&view=vewENISqJi",
-        "document_id": "MTHxwrGIfiYjJHkLL4HcsBWOnPh"
-        "is_wiki": True  # 标记为wiki文档
+        "document_id": "MTHxwrGIfiYjJHkLL4HcsBWOnPh",
+        "is_wiki": True
     },
-    # 私聊测试（BusJam项目）
+    # BusJam项目
     "oc_c837780ca61da27e17d98d55bca4c83f": {
         "name": "BusJam",
         "app_token": "OkR6bHCAfa3JrMst4fpcHd2SnHc",
         "table_id": "tblA0oTFNEI9O2wm",
-        "document_id": "P80VdXVf3oFh0oxej41cIAY3nsf"
-        "is_wiki": 
+        "document_id": "P80VdXVf3oFh0oxej41cIAY3nsf",
+        "is_wiki": False
     }
 }
-    # 使用wiki
-    # "oc_xxx": {
-    #     "name": "项目2",
-    #     "app_token": "xxx",
-    #     "table_id": "xxx",
-    #     "document_id": "wiki/后的id",
-    #     "is_wiki": True  # 标记为wiki文档
-    # },
-    # 使用普通云文档
-    # "oc_xxx": {
-    #     "name": "项目2",
-    #     "app_token": "xxx",
-    #     "table_id": "xxx",
-    #     "document_id": "xxx",
-    #     "is_wiki": False  # 普通文档
-    # },
 
 # 消息去重
 processed_messages = set()
