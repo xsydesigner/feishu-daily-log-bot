@@ -32,11 +32,12 @@ STATUS_PASSED = "验收通过"
 # 项目配置（根据chat_id匹配项目）
 PROJECTS = {
     # chat_id: 项目配置
-    "oc_xxx1": {
-        "name": "项目1",
-        "app_token": "你的app_token",
-        "table_id": "你的table_id",
-        "document_id": "你的document_id"
+    "oc_c837780ca61da27e17d98d55bca4c83f": {
+        "name": "JigArt",
+        "app_token": "Q8BWbvdpja9RzEsFXbjcXEy3nof",
+        "table_id": "tbluv9XFW2P6B7sn&view=vewENISqJi",
+        "document_id": "MTHxwrGIfiYjJHkLL4HcsBWOnPh"
+        "is_wiki": True  # 标记为wiki文档
     },
     # 私聊测试（BusJam项目）
     "oc_c837780ca61da27e17d98d55bca4c83f": {
@@ -46,7 +47,23 @@ PROJECTS = {
         "document_id": "P80VdXVf3oFh0oxej41cIAY3nsf"
     },
 }
-
+    # 使用wiki
+    # "oc_xxx": {
+    #     "name": "项目2",
+    #     "app_token": "xxx",
+    #     "table_id": "xxx",
+    #     "document_id": "wiki/后的id",
+    #     "is_wiki": True  # 标记为wiki文档
+    # },
+    # 使用普通云文档
+    # "oc_xxx": {
+    #     "name": "项目2",
+    #     "app_token": "xxx",
+    #     "table_id": "xxx",
+    #     "document_id": "xxx",
+    #     "is_wiki": False  # 普通文档
+    # },
+}
 # 消息去重
 processed_messages = set()
 
@@ -69,6 +86,32 @@ def get_tenant_access_token():
     })
     return resp.json().get("tenant_access_token")
 
+def get_wiki_document_id(wiki_token):
+    """获取wiki文档的实际document_id"""
+    token = get_tenant_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    url = f"https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node"
+    params = {"token": wiki_token}
+    
+    try:
+        resp = requests.get(url, headers=headers, params=params)
+        data = resp.json()
+        
+        print(f"   wiki API返回: {data}")
+        
+        if data.get("code") == 0:
+            node = data.get("data", {}).get("node", {})
+            obj_token = node.get("obj_token")
+            obj_type = node.get("obj_type")
+            print(f"   wiki解析成功: {wiki_token} -> {obj_token} (类型:{obj_type})")
+            return obj_token
+        else:
+            print(f"   wiki解析失败: {data}")
+            return None
+    except Exception as e:
+        print(f"   wiki解析异常: {e}")
+        return None
 # ============================================================
 # 读取群消息
 # ============================================================
@@ -433,7 +476,6 @@ def handle_generate_log(message):
     project = PROJECTS.get(chat_id)
     
     if not project:
-        # 如果没有配置，返回chat_id供配置使用
         reply_message(message_id, 
             f"❓ 未找到该群的配置\n\n"
             f"请将以下chat_id添加到配置中：\n"
@@ -449,7 +491,7 @@ def handle_generate_log(message):
         print(f"   获取到 {len(messages)} 条消息")
         
         # 2. 获取验收需求
-        print("📋 获取验收需求...")
+        print("📋 获取今日需求...")
         requirements = get_accepted_requirements(project)
         print(f"   获取到 {len(requirements)} 条今日需求")
         
@@ -463,12 +505,29 @@ def handle_generate_log(message):
         
         print(f"   生成总结：\n{summary[:200]}...")
         
-        # 4. 写入云文档
+        # 4. 获取实际的document_id
+        document_id = project["document_id"]
+        is_wiki = project.get("is_wiki", False)
+        
+        if is_wiki:
+            print("📄 解析wiki文档...")
+            real_doc_id = get_wiki_document_id(document_id)
+            if not real_doc_id:
+                reply_message(message_id, "❌ wiki文档解析失败，请检查权限")
+                return
+            document_id = real_doc_id
+        
+        # 5. 写入云文档
         print("📝 写入云文档...")
-        success = append_to_document(project["document_id"], summary)
+        success = append_to_document(document_id, summary)
         
         if success:
-            doc_url = f"https://rfc9wxlr7c.feishu.cn/docx/{project['document_id']}"
+            # 根据类型生成文档链接
+            if is_wiki:
+                doc_url = f"https://rfc9wxlr7c.feishu.cn/wiki/{project['document_id']}"
+            else:
+                doc_url = f"https://rfc9wxlr7c.feishu.cn/docx/{document_id}"
+            
             reply_message(message_id, 
                 f"✅ {project['name']} 产品日志已生成！\n\n"
                 f"📊 数据来源：\n"
