@@ -32,7 +32,7 @@ STATUS_PASSED = "验收通过"
 # 项目配置（根据chat_id匹配项目）
 PROJECTS = {
     # chat_id: 项目配置
-    "oc_c837780ca61da27e17d98d55bca4c83f": {
+    "oc_": {
         "name": "JigArt",
         "app_token": "Q8BWbvdpja9RzEsFXbjcXEy3nof",
         "table_id": "tbluv9XFW2P6B7sn&view=vewENISqJi",
@@ -45,6 +45,7 @@ PROJECTS = {
         "app_token": "OkR6bHCAfa3JrMst4fpcHd2SnHc",
         "table_id": "tblA0oTFNEI9O2wm",
         "document_id": "P80VdXVf3oFh0oxej41cIAY3nsf"
+        "is_wiki": 
     },
 }
     # 使用wiki
@@ -63,7 +64,7 @@ PROJECTS = {
     #     "document_id": "xxx",
     #     "is_wiki": False  # 普通文档
     # },
-}
+
 # 消息去重
 processed_messages = set()
 
@@ -482,7 +483,7 @@ def handle_generate_log(message):
             f"`{chat_id}`")
         return
     
-    reply_message(message_id, f"⏳ 正在生成 {project['name']} 的产品日志，请稍候...")
+    # 不再发送"正在生成"的消息
     
     try:
         # 1. 获取群消息
@@ -490,7 +491,7 @@ def handle_generate_log(message):
         messages = get_chat_messages(chat_id)
         print(f"   获取到 {len(messages)} 条消息")
         
-        # 2. 获取验收需求
+        # 2. 获取今日需求
         print("📋 获取今日需求...")
         requirements = get_accepted_requirements(project)
         print(f"   获取到 {len(requirements)} 条今日需求")
@@ -533,11 +534,15 @@ def handle_generate_log(message):
                 f"📊 数据来源：\n"
                 f"   • 群消息：{len(messages)} 条\n"
                 f"   • 今日需求：{len(requirements)} 条\n\n"
+                f"📝 生成内容：\n"
+                f"━━━━━━━━━━━━━━━━\n"
+                f"{summary}\n"
+                f"━━━━━━━━━━━━━━━━\n\n"
                 f"📄 查看文档：{doc_url}")
         else:
             reply_message(message_id, 
                 f"⚠️ 日志生成完成，但写入文档失败\n\n"
-                f"生成的内容：\n{summary[:500]}...")
+                f"生成的内容：\n{summary}")
         
     except Exception as e:
         print(f"❌ 处理失败: {e}")
