@@ -184,16 +184,20 @@ def get_chat_messages(chat_id):
 # 读取多维表格验收需求
 # ============================================================
 
-def get_accepted_requirements(project):
-    """获取今日进行中的需求"""
+ddef get_accepted_requirements(project):
+    """获取今日需求（区分进行中和已完成）"""
     print("   正在查询多维表格...")
     
     token = get_tenant_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
+    # 获取今天日期时间戳
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_ts = int(today.timestamp() * 1000)
+    tomorrow_ts = int((today + timedelta(days=1)).timestamp() * 1000)
+    
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{project['app_token']}/tables/{project['table_id']}/records/search"
     
-    # 只筛选"是否今日任务"="是"的记录
     payload = {
         "filter": {
             "conjunction": "and",
@@ -223,7 +227,7 @@ def get_accepted_requirements(project):
             for item in items:
                 fields = item.get("fields", {})
                 
-                # 处理需求内容字段（可能是富文本格式）
+                # 处理需求内容字段
                 req_name_raw = fields.get(FIELD_REQUIREMENT, "")
                 if isinstance(req_name_raw, list):
                     req_name = "".join([t.get("text", "") for t in req_name_raw if isinstance(t, dict)])
@@ -232,23 +236,31 @@ def get_accepted_requirements(project):
                 
                 owner = fields.get("任务执行人", "")
                 role = fields.get("部门", "其他")
-                status = fields.get(FIELD_STATUS, "")
-                dev_status = fields.get("开发状态", "")
+                start_time = fields.get("开始时间")
+                end_time = fields.get("截止时间")
                 
                 if isinstance(owner, list) and owner:
                     owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
                 if isinstance(role, list) and role:
                     role = role[0] if isinstance(role[0], str) else str(role[0])
                 
+                # 判断状态：进行中 or 已完成
+                # 进行中：开始时间 <= 今天 且 截止时间 > 今天
+                # 已完成：截止时间 = 今天
+                status = "进行中"
+                if end_time:
+                    end_ts = int(end_time) if isinstance(end_time, (int, float)) else 0
+                    if end_ts < tomorrow_ts:  # 截止时间是今天
+                        status = "已完成"
+                
                 requirements.append({
                     "name": req_name,
                     "owner": str(owner),
                     "role": str(role),
-                    "status": str(status) if status else "",
-                    "dev_status": str(dev_status) if dev_status else ""
+                    "status": status
                 })
                 
-                print(f"   ✓ {req_name[:20]}")
+                print(f"   ✓ [{status}] {req_name[:20]}")
         else:
             print(f"   API错误: {data}")
             
@@ -268,19 +280,21 @@ def call_glm_summary(messages, requirements, project_name):
     
     today = datetime.now().strftime("%Y/%m/%d")
     
+    # 分离进行中和已完成的需求
+    in_progress = [r for r in requirements if r.get("status") == "进行中"]
+    completed = [r for r in requirements if r.get("status") == "已完成"]
+    
     # 构建需求文本
     req_text = ""
-    for req in requirements:
-        status = req.get("status", "")
-        dev_status = req.get("dev_status", "")
-        
-        # 判断状态
-        if status == "验收通过" or dev_status == "已完成":
-            state = "已完成"
-        else:
-            state = "进行中"
-        
-        req_text += f"- {req['name']} | 负责人: {req['owner']} | 部门: {req['role']} | 状态: {state}\n"
+    if completed:
+        req_text += "【已完成的需求】\n"
+        for r in completed:
+            req_text += f"- {r['name']} @{r['owner']} (部门:{r['role']})\n"
+    
+    if in_progress:
+        req_text += "\n【进行中的需求】\n"
+        for r in in_progress:
+            req_text += f"- {r['name']} @{r['owner']} (部门:{r['role']})\n"
     
     if not req_text:
         req_text = "无需求"
@@ -288,37 +302,41 @@ def call_glm_summary(messages, requirements, project_name):
     # 构建群消息文本
     msg_text = ""
     for m in messages[-50:]:
-        msg_text += f"- {m.get('text', '')}\n"
+        text = m.get('text', '')
+        if text and len(text) > 5:
+            msg_text += f"- {text}\n"
     
-    prompt = f"""你是产品日志助手。根据以下需求表和群消息，生成{project_name}的产品日志。
+    prompt = f"""你是一个产品日志助手。请根据以下信息，生成{project_name}的产品日志。
 
-## 今日需求列表：
+今日日期：{today}
+
+## 需求列表：
 {req_text}
 
 ## 今日群消息：
 {msg_text if msg_text else "无消息"}
 
-## 输出要求：
+请按以下格式输出：
 
-1. 按以下格式输出每条需求（不要加日期，不要总结）：
-   - 已完成的需求：序号. 【已完成】需求内容 @负责人
-   - 进行中的需求：序号. 【进行中】需求内容 @负责人 - 进度说明（从群消息中提取）
-   - 延期的需求：序号. 【延期】需求内容 @负责人 - 延期原因（从群消息中分析）
+【已完成】
+1. 【已完成】需求内容1 @负责人
+2. 【已完成】需求内容2 @负责人
 
-2. 判断逻辑：
-   - 状态为"已完成"或"验收通过"的 → 标记【已完成】
-   - 状态为"进行中"的 → 标记【进行中】，并从群消息中找相关进度
-   - 如果群消息提到某需求有问题、卡住、延期 → 标记【延期】并说明原因
+【进行中】
+1. 【进行中】需求内容1 @负责人 - 进度描述
+2. 【进行中】需求内容2 @负责人 - 进度描述
 
-3. 最后单独输出测试相关内容：
-   测试：
-   1. 从群消息中提取测试相关的进度或问题
+测试：
+1. 从群消息中提取测试相关进度
 
-4. 注意：
-   - 不要写开头总结
-   - 不要写日期
-   - 每条需求一行
-   - 如果群消息中没有某需求的进度信息，进行中的需求就只写【进行中】不加进度说明"""
+要求：
+1. 已完成的需求直接列出，格式：【已完成】需求内容 @负责人
+2. 进行中的需求，根据群消息分析当前进度，格式：【进行中】需求内容 @负责人 - 进度描述
+3. 进度描述要具体，比如"UI给出初版方案"、"程序完成核心功能"、"测试跑测50%"等
+4. 如果群消息中没有相关进度信息，就写"进度待更新"
+5. 测试部分从群消息中提取，如果没有就写"今日无测试进度"
+6. 不要输出【已完成】【进行中】这两个分类标题，直接输出内容
+7. 不要一句话总结"""
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {
