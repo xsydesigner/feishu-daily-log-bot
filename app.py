@@ -184,7 +184,7 @@ def get_chat_messages(chat_id):
 # 读取多维表格验收需求
 # ============================================================
 
-ddef get_accepted_requirements(project):
+def get_accepted_requirements(project):
     """获取今日需求（区分进行中和已完成）"""
     print("   正在查询多维表格...")
     
