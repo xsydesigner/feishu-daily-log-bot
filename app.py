@@ -270,9 +270,17 @@ def call_glm_summary(messages, requirements, project_name):
     
     # 构建需求文本
     req_text = ""
-    for i, req in enumerate(requirements, 1):
-        status = "已完成" if req.get("status") == "验收通过" or req.get("dev_status") == "已完成" else "进行中"
-        req_text += f"{i}. [{status}] {req['name']} @{req['owner']}\n"
+    for req in requirements:
+        status = req.get("status", "")
+        dev_status = req.get("dev_status", "")
+        
+        # 判断状态
+        if status == "验收通过" or dev_status == "已完成":
+            state = "已完成"
+        else:
+            state = "进行中"
+        
+        req_text += f"- {req['name']} | 负责人: {req['owner']} | 部门: {req['role']} | 状态: {state}\n"
     
     if not req_text:
         req_text = "无需求"
@@ -280,46 +288,37 @@ def call_glm_summary(messages, requirements, project_name):
     # 构建群消息文本
     msg_text = ""
     for m in messages[-50:]:
-        text = m.get('text', '')
-        if text and len(text) > 2:
-            msg_text += f"- {text}\n"
+        msg_text += f"- {m.get('text', '')}\n"
     
-    if not msg_text:
-        msg_text = "无消息"
-    
-    prompt = f"""你是{project_name}项目的产品日志助手。请根据以下信息生成今日产品日志。
+    prompt = f"""你是产品日志助手。根据以下需求表和群消息，生成{project_name}的产品日志。
 
-## 今日日期
-{today}
-
-## 今日需求列表
+## 今日需求列表：
 {req_text}
 
-## 今日群聊消息
-{msg_text}
+## 今日群消息：
+{msg_text if msg_text else "无消息"}
 
-## 输出要求
+## 输出要求：
 
-请严格按以下格式输出：
+1. 按以下格式输出每条需求（不要加日期，不要总结）：
+   - 已完成的需求：序号. 【已完成】需求内容 @负责人
+   - 进行中的需求：序号. 【进行中】需求内容 @负责人 - 进度说明（从群消息中提取）
+   - 延期的需求：序号. 【延期】需求内容 @负责人 - 延期原因（从群消息中分析）
 
-第一行：用1-2句话总结今日项目整体进度（从群消息和需求中提炼）
+2. 判断逻辑：
+   - 状态为"已完成"或"验收通过"的 → 标记【已完成】
+   - 状态为"进行中"的 → 标记【进行中】，并从群消息中找相关进度
+   - 如果群消息提到某需求有问题、卡住、延期 → 标记【延期】并说明原因
 
-第二行开始：列出所有需求
-1. 【已完成/进行中】需求内容 @负责人
-2. 【已完成/进行中】需求内容 @负责人
+3. 最后单独输出测试相关内容：
+   测试：
+   1. 从群消息中提取测试相关的进度或问题
 
-最后：如果群消息中有测试相关内容，添加测试总结
-测试：
-1. 测试进度内容
-2. 测试进度内容
-
-## 注意事项
-1. 总结要简洁，不超过2句话
-2. 需求列表保持原有内容，只调整格式
-3. 从群消息中提取测试相关信息（如：用例、bug、跑测等）
-4. 如果没有测试相关消息，测试部分写"暂无测试进度更新"
-5. 不要输出任何标记如[SUMMARY]等
-6. 不要按部门分组，所有需求放一起"""
+4. 注意：
+   - 不要写开头总结
+   - 不要写日期
+   - 每条需求一行
+   - 如果群消息中没有某需求的进度信息，进行中的需求就只写【进行中】不加进度说明"""
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {
@@ -336,9 +335,6 @@ def call_glm_summary(messages, requirements, project_name):
     }
     
     try:
-        print(f"   发送给AI的需求: {len(requirements)} 条")
-        print(f"   发送给AI的消息: {len(messages)} 条")
-        
         resp = requests.post(url, headers=headers, json=payload, timeout=60)
         data = resp.json()
         
