@@ -241,26 +241,12 @@ def get_accepted_requirements(project):
                 end_time = fields.get("截止时间")
                 
                 # 判断状态：进行中 or 已完成
-                # 已完成：截止时间 = 今日（today_ts <= end_time < tomorrow_ts）
-                # 进行中：开始时间 <= 今日 AND 截止时间 > 今日
-                task_status = None
-                
+                # 进行中：开始时间 <= 今日，截止时间 > 今日
+                # 已完成：截止时间 <= 今日
+                task_status = "进行中"
                 if end_time and isinstance(end_time, (int, float)):
-                    # 已完成：截止时间是今天
-                    if today_ts <= end_time < tomorrow_ts:
+                    if end_time < tomorrow_ts:
                         task_status = "已完成"
-                    # 进行中：开始时间 <= 今天 AND 截止时间 > 今天
-                    elif end_time >= tomorrow_ts:
-                        if start_time and isinstance(start_time, (int, float)):
-                            if start_time < tomorrow_ts:
-                                task_status = "进行中"
-                        else:
-                            # 没有开始时间，默认进行中
-                            task_status = "进行中"
-                
-                # 跳过不符合条件的需求
-                if task_status is None:
-                    continue
                 
                 owner = fields.get("任务执行人", "")
                 role = fields.get("部门", "其他")
@@ -360,7 +346,8 @@ def call_glm_summary(messages, requirements, project_name):
 4. 群消息仅用于分析已有需求的进度详情
 5. 如果群消息中没有某需求的进度信息，写"进度待更新"
 6. 如果已完成或进行中的需求为空，对应部分写"无"
-7. 不要包含任何机器人发送的消息内容"""
+7. 测试部分：只有群消息中有测试相关内容时才输出，否则完全省略"测试："这一部分
+8. 不要包含任何机器人发送的消息内容"""
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {
