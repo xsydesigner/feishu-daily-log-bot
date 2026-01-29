@@ -46,7 +46,7 @@ PROJECTS = {
         "table_id": "tblA0oTFNEI9O2wm",
         "document_id": "P80VdXVf3oFh0oxej41cIAY3nsf"
         "is_wiki": 
-    },
+    }
 }
     # 使用wiki
     # "oc_xxx": {
