@@ -325,13 +325,11 @@ def call_glm_summary(messages, requirements, project_name):
 
 请严格按以下格式输出：
 
-今日进度总结：（1句话概括）
-
 【已完成】
 1. 需求名称 @负责人
 
 【进行中】
-1. 需求名称 @负责人 - 进度描述
+1. 需求名称 @负责人
 
 测试：
 1. 测试进度
