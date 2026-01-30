@@ -280,6 +280,11 @@ def get_accepted_requirements(project):
 def call_glm_summary(messages, requirements, project_name):
     """调用智谱GLM生成日志总结"""
     
+    print("=" * 50)
+    print("🤖 开始调用GLM API")
+    print(f"   GLM_API_KEY: {GLM_API_KEY[:10]}..." if GLM_API_KEY else "   ❌ GLM_API_KEY 未配置!")
+    print("=" * 50)
+    
     today = datetime.now().strftime("%Y/%m/%d")
     
     # 分离进行中和已完成的需求
@@ -343,7 +348,7 @@ def call_glm_summary(messages, requirements, project_name):
 4. 群消息仅用于分析已有需求的进度详情
 5. 如果群消息中没有某需求的进度信息，写"进度待更新"
 6. 如果已完成或进行中的需求为空，对应部分写"无"
-7. 测试部分：只有群消息中有测试相关内容时才输出，否则完全省略"测试："这一部分
+7. 测试部分：只有群消息中有测试相关内容时才输出，否则完全不列出"测试："这一部分
 8. 不要包含任何机器人发送的消息内容"""
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
@@ -360,19 +365,31 @@ def call_glm_summary(messages, requirements, project_name):
         "temperature": 0.3
     }
     
+    print(f"📤 请求URL: {url}")
+    print(f"📤 使用模型: glm-4-flash")
+    
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=60)
+        
+        print(f"📥 HTTP状态码: {resp.status_code}")
+        print(f"📥 完整返回: {resp.text[:500]}")  # 打印完整返回
+        
         data = resp.json()
         
         if "choices" in data:
             result = data["choices"][0]["message"]["content"]
-            print(f"   GLM返回:\n{result[:300]}...")
+            print(f"✅ GLM调用成功!")
+            print(f"📥 GLM返回内容:\n{result}")
             return result
         else:
-            print(f"GLM返回错误: {data}")
+            print(f"❌ GLM返回错误: {data}")
+            # 如果API失败，返回一个备用文本
+            print("⚠️ 使用备用输出...")
             return None
     except Exception as e:
-        print(f"调用GLM失败: {e}")
+        print(f"❌ 调用GLM异常: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 # ============================================================
