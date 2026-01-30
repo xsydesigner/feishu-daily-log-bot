@@ -186,10 +186,16 @@ def get_accepted_requirements(project):
                     status = status[0] if isinstance(status[0], str) else str(status[0])
                 task_status = "已完成" if status == STATUS_PASSED else "进行中"
                 
-                # 任务执行人
-                owner = fields.get(FIELD_OWNER, "")
-                if isinstance(owner, list) and owner:
-                    owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
+                # 任务执行人 - 同时获取名字和ID
+                owner_name = ""
+                owner_id = ""
+                owner_raw = fields.get(FIELD_OWNER, "")
+                if isinstance(owner_raw, list) and owner_raw:
+                    if isinstance(owner_raw[0], dict):
+                        owner_name = owner_raw[0].get("name", "")
+                        owner_id = owner_raw[0].get("id", "")  # 获取user_id
+                    else:
+                        owner_name = str(owner_raw[0])
                 
                 # 部门
                 role = fields.get(FIELD_ROLE, "其他")
@@ -198,11 +204,12 @@ def get_accepted_requirements(project):
                 
                 requirements.append({
                     "name": req_name,
-                    "owner": str(owner),
+                    "owner": owner_name,
+                    "owner_id": owner_id,  # 新增：用户ID
                     "role": str(role),
                     "task_status": task_status
                 })
-                print(f"   ✓ [{task_status}] {req_name[:20]}... @{owner} ({role})")
+                print(f"   ✓ [{task_status}] {req_name[:20]}... @{owner_name} ({role})")
         else:
             print(f"   API错误: {data}")
     except Exception as e:
@@ -302,8 +309,8 @@ UI:
 # 写入飞书云文档
 # ============================================================
 
-def append_to_document(document_id, content):
-    """追加内容到云文档（分割线格式）"""
+def append_to_document(document_id, content, user_map=None):
+    """追加内容到云文档（分割线格式，支持@人高亮）"""
     token = get_tenant_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
@@ -359,27 +366,30 @@ def append_to_document(document_id, content):
         # 有序列表
         elif re.match(r"^\d+[\.\、]", line):
             text = re.sub(r"^\d+[\.\、]\s*", "", line)
+            elements = parse_mention_elements(text, user_map)
             blocks.append({
                 "block_type": 13,
                 "ordered": {
-                    "elements": [{"text_run": {"content": text}}]
+                    "elements": elements
                 }
             })
         # 无序列表
         elif line.startswith("•") or line.startswith("-"):
             text = line.lstrip("•- ").strip()
+            elements = parse_mention_elements(text, user_map)
             blocks.append({
                 "block_type": 12,
                 "bullet": {
-                    "elements": [{"text_run": {"content": text}}]
+                    "elements": elements
                 }
             })
         # 普通文本
         else:
+            elements = parse_mention_elements(line, user_map)
             blocks.append({
                 "block_type": 2,
                 "text": {
-                    "elements": [{"text_run": {"content": line}}]
+                    "elements": elements
                 }
             })
     
@@ -403,6 +413,48 @@ def append_to_document(document_id, content):
     except Exception as e:
         print(f"   ❌ 写入异常: {e}")
         return False
+
+
+def parse_mention_elements(text, user_map):
+    """解析文本，将@人名转换为mention_user元素"""
+    if not user_map or not text:
+        return [{"text_run": {"content": text}}]
+    
+    elements = []
+    # 匹配 @人名（人名可能包含中文、英文、数字）
+    pattern = r'@([^\s@]+)'
+    last_end = 0
+    
+    for match in re.finditer(pattern, text):
+        # 添加@前面的文本
+        if match.start() > last_end:
+            elements.append({"text_run": {"content": text[last_end:match.start()]}})
+        
+        name = match.group(1)
+        user_id = user_map.get(name)
+        
+        if user_id:
+            # 有user_id，使用mention_user实现高亮
+            elements.append({
+                "mention_user": {
+                    "user_id": user_id
+                }
+            })
+        else:
+            # 没有找到user_id，保持原文本
+            elements.append({"text_run": {"content": match.group(0)}})
+        
+        last_end = match.end()
+    
+    # 添加最后剩余的文本
+    if last_end < len(text):
+        elements.append({"text_run": {"content": text[last_end:]}})
+    
+    # 如果没有匹配到任何内容
+    if not elements:
+        elements = [{"text_run": {"content": text}}]
+    
+    return elements
 
 # ============================================================
 # 回复消息
@@ -447,7 +499,14 @@ def handle_generate_log(message):
         print("📋 获取今日需求...")
         requirements = get_accepted_requirements(project)
         
-        # 3. 调用GLM生成总结
+        # 3. 构建用户映射表（名字 -> user_id）
+        user_map = {}
+        for r in requirements:
+            if r.get("owner") and r.get("owner_id"):
+                user_map[r["owner"]] = r["owner_id"]
+        print(f"   用户映射: {list(user_map.keys())}")
+        
+        # 4. 调用GLM生成总结
         print("🤖 调用GLM生成总结...")
         summary = call_glm_summary(messages, requirements, project["name"])
         
@@ -455,14 +514,14 @@ def handle_generate_log(message):
             reply_message(message_id, "❌ AI总结生成失败，请重试")
             return
         
-        # 4. 获取document_id
+        # 5. 获取document_id
         document_id = project["document_id"]
         if project.get("is_wiki"):
             document_id = get_wiki_document_id(document_id) or document_id
         
-        # 5. 写入云文档
+        # 6. 写入云文档（传入user_map实现@高亮）
         print("📝 写入云文档...")
-        success = append_to_document(document_id, summary)
+        success = append_to_document(document_id, summary, user_map)
         
         if success:
             if project.get("is_wiki"):
@@ -470,6 +529,7 @@ def handle_generate_log(message):
             else:
                 doc_url = f"https://rfc9wxlr7c.feishu.cn/docx/{document_id}"
             
+            # 回复消息不带@高亮，直接文本
             reply_message(message_id, 
                 f"✅ {project['name']} 产品日志已生成！\n\n"
                 f"📊 数据来源：\n"
@@ -486,7 +546,7 @@ def handle_generate_log(message):
     except Exception as e:
         print(f"❌ 处理失败: {e}")
         reply_message(message_id, f"❌ 生成失败：{str(e)}")
-
+        
 # ============================================================
 # Webhook路由
 # ============================================================
