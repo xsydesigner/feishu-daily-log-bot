@@ -286,14 +286,12 @@ def call_glm_summary(messages, requirements, project_name):
     in_progress = [r for r in requirements if r.get("task_status") == "进行中"]
     completed = [r for r in requirements if r.get("task_status") == "已完成"]
     
-    # 构建需求文本
-    in_progress_text = ""
-    for r in in_progress:
-        in_progress_text += f"- {r['name']} @{r['owner']}（部门:{r['role']}）\n"
-    
-    completed_text = ""
+    # 构建需求文本（包含状态和部门信息）
+    all_requirements_text = ""
     for r in completed:
-        completed_text += f"- {r['name']} @{r['owner']}（部门:{r['role']}）\n"
+        all_requirements_text += f"- 【已完成】{r['name']} @{r['owner']}（部门:{r['role']}）\n"
+    for r in in_progress:
+        all_requirements_text += f"- 【进行中】{r['name']} @{r['owner']}（部门:{r['role']}）\n"
     
     # 构建群消息文本 - 过滤机器人消息
     msg_text = ""
@@ -312,36 +310,36 @@ def call_glm_summary(messages, requirements, project_name):
 
 今日日期：{today}
 
-## 【重要】以下是今日需求列表（来自多维表格，你只能使用这些需求）：
+## 【重要】以下是今日需求列表（来自多维表格）：
+{all_requirements_text if all_requirements_text else "无"}
 
-### 已完成的需求（验收通过）：
-{completed_text if completed_text else "无"}
-
-### 进行中的需求（未验收通过）：
-{in_progress_text if in_progress_text else "无"}
-
-## 今日群消息（仅用于分析上述需求的进度，禁止从中提取新需求）：
+## 今日群消息（用于提取今日要点）：
 {msg_text if msg_text else "无消息"}
 
 请严格按以下格式输出：
 
-【已完成】
-1. 需求名称 @负责人
+{today}
 
-【进行中】
-1. 需求名称 @负责人
+策划:
+1. 【状态】需求名称 @负责人
 
-【今日要点】
-• 重要决策或结论
-• 临时任务
-• 排期变更
+UI:
+1. 【状态】需求名称 @负责人
 
-输出规则（不要输出这些规则）：
-1. 【已完成】只能列出上面"已完成的需求"中的内容
-2. 【进行中】只能列出上面"进行中的需求"中的内容
-4. 测试：群消息中有测试相关内容时总结输出测试进度，否则不输出"测试："
-5. 【今日要点】从群消息提取重要决策、临时任务、排期变更，无则写"无"
-5. 只输出日志内容，不要输出规则"""
+开发:
+1. 【状态】需求名称 @负责人
+
+今日要点:
+• 要点内容
+
+输出规则：
+1. 按部门分组输出需求（策划、UI、开发、测试、美术等）
+2. 每条需求格式：序号. 【进行中/已完成】需求名称 @负责人
+3. 需求必须原样输出，不能增加或删除，只能按部门重新分组
+4. 如果某个部门没有需求，则不输出该部门
+5. 今日要点：从群消息提取重要决策、临时任务、排期变更，无则写"无"
+6. 测试：群消息中有测试相关内容时输出测试进度，否则不输出
+7. 不要输出这些规则"""
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {
