@@ -280,53 +280,106 @@ def get_accepted_requirements(project):
 def call_glm_summary(messages, requirements, project_name):
     """调用智谱GLM生成日志总结"""
     
-    print("=" * 50)
-    print("🤖 开始调用GLM API")
-    print(f"   GLM_API_KEY: {GLM_API_KEY[:10]}..." if GLM_API_KEY else "   ❌ GLM_API_KEY 未配置!")
-    print("=" * 50)
-    
     today = datetime.now().strftime("%Y/%m/%d")
     
     # 分离进行中和已完成的需求
     in_progress = [r for r in requirements if r.get("task_status") == "进行中"]
     completed = [r for r in requirements if r.get("task_status") == "已完成"]
     
-    # 构建需求文本
-    in_progress_text = ""
-    for r in in_progress:
-        in_progress_text += f"- {r['name']} @{r['owner']} (部门:{r['role']})\n"
-    
-    completed_text = ""
-    for r in completed:
-        completed_text += f"- {r['name']} @{r['owner']} (部门:{r['role']})\n"
-    
-    # 构建群消息文本 - 过滤机器人消息
-    msg_text = ""
+    # 过滤群消息（排除机器人消息）
+    user_messages = []
     for m in messages[-50:]:
-        # 跳过机器人发送的消息
         if m.get("sender_type") == "机器人":
             continue
         text = m.get("text", "")
-        if text and len(text) > 5:
+        if text and len(text) > 3:
             # 过滤机器人相关内容
             if "产品日志" in text or "正在生成" in text or "已生成" in text:
                 continue
-            msg_text += f"- {text}\n"
+            user_messages.append(text)
+    
+    # ============ 关键：为每个进行中需求匹配相关消息 ============
+    def find_related_messages(req_name, messages_list):
+        """根据需求名称，找出相关的群消息"""
+        related = []
+        
+        # 提取需求名称中的关键词（去掉常见词）
+        # 例如 "产品日志机器人test1" -> ["产品日志机器人", "test1"]
+        keywords = []
+        
+        # 添加完整名称
+        keywords.append(req_name)
+        
+        # 提取可能的简短标识（如test1, test2）
+        import re
+        # 匹配类似 test1, test2, 需求1 等模式
+        short_ids = re.findall(r'[a-zA-Z]+\d+|\w*\d+', req_name)
+        keywords.extend(short_ids)
+        
+        # 如果需求名称较长，取前几个字作为关键词
+        if len(req_name) > 4:
+            keywords.append(req_name[:4])
+        
+        # 在消息中查找包含关键词的
+        for msg in messages_list:
+            msg_lower = msg.lower()
+            for kw in keywords:
+                if kw.lower() in msg_lower:
+                    if msg not in related:
+                        related.append(msg)
+                    break
+        
+        return related
+    
+    # 构建进行中需求文本（带相关消息）
+    in_progress_text = ""
+    for r in in_progress:
+        req_name = r['name']
+        owner = r['owner']
+        role = r['role']
+        
+        # 找相关消息
+        related_msgs = find_related_messages(req_name, user_messages)
+        
+        in_progress_text += f"\n需求：{req_name}\n"
+        in_progress_text += f"负责人：@{owner}（部门:{role}）\n"
+        if related_msgs:
+            in_progress_text += f"相关群消息：\n"
+            for msg in related_msgs[:3]:  # 最多3条相关消息
+                in_progress_text += f"  - {msg}\n"
+        else:
+            in_progress_text += f"相关群消息：无\n"
+    
+    # 构建已完成需求文本
+    completed_text = ""
+    for r in completed:
+        completed_text += f"- {r['name']} @{r['owner']}（部门:{r['role']}）\n"
+    
+    # 测试相关消息（包含"测试"、"bug"、"跑测"等关键词的消息）
+    test_keywords = ["测试", "test", "bug", "跑测", "用例", "验证", "通过", "失败"]
+    test_messages = []
+    for msg in user_messages:
+        msg_lower = msg.lower()
+        if any(kw in msg_lower for kw in test_keywords):
+            test_messages.append(msg)
+    
+    test_text = ""
+    if test_messages:
+        for msg in test_messages[:5]:
+            test_text += f"- {msg}\n"
     
     prompt = f"""你是一个产品日志助手。请根据以下信息，生成{project_name}的产品日志。
 
 今日日期：{today}
 
-## 【重要】以下是今日需求列表（来自多维表格，你只能使用这些需求）：
-
-### 已完成的需求（验收通过）：
+## 已完成的需求（验收通过）：
 {completed_text if completed_text else "无"}
 
-### 进行中的需求（未验收通过）：
+## 进行中的需求（每个需求已匹配相关群消息）：
 {in_progress_text if in_progress_text else "无"}
 
-## 今日群消息（用于分析进行中需求的进度）：
-{msg_text if msg_text else "无消息"}
+## 测试相关的群消息：
+{test_text if test_text else "无"}
 
 请严格按以下格式输出：
 
@@ -336,20 +389,18 @@ def call_glm_summary(messages, requirements, project_name):
 1. 需求名称 @负责人
 
 【进行中】
-1. 需求名称 @负责人 - 简短进度
+1. 需求名称 @负责人 - 进度描述
 
 测试：
 1. 测试进度
 
-⚠️ 严格要求（必须遵守）：
-1. 【已完成】只能列出上面"已完成的需求"中的内容，不能添加其他内容
-2. 【进行中】只能列出上面"进行中的需求"中的内容，从群消息中找相关内容总结进度，进度描述要简短
-3. 禁止从群消息中创造或提取新的需求
-4. 群消息仅用于分析已有需求的进度详情
-5. 如果群消息中没有某需求的进度信息，写"进度待更新"
-6. 如果已完成或进行中的需求为空，对应部分写"无"
-7. 测试部分：只有群消息中有测试相关内容时才输出，否则完全不列出"测试："这一部分
-8. 不要包含任何机器人发送的消息内容"""
+输出规则（不要输出这些规则）：
+1. 【已完成】直接列出已完成的需求
+2. 【进行中】根据每个需求下方的"相关群消息"来总结进度，进度描述要简短（10字以内）
+3. 如果某个需求的"相关群消息"为空，进度写"进度待更新"
+4. 如果相关群消息有内容，提取关键进度信息，例如："已接入AI"、"设计中"、"待验证"
+5. 测试部分根据"测试相关的群消息"来总结，如果没有测试消息则不输出"测试："这部分
+6. 不要编造任何信息，只使用提供的内容"""
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {
@@ -362,32 +413,30 @@ def call_glm_summary(messages, requirements, project_name):
         "messages": [
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.3
+        "temperature": 0.2  # 降低温度，减少创造性
     }
     
-    print(f"📤 请求URL: {url}")
-    print(f"📤 使用模型: glm-4-flash")
+    print("=" * 50)
+    print("🤖 调用GLM API")
+    print(f"   进行中需求数: {len(in_progress)}")
+    print(f"   用户消息数: {len(user_messages)}")
+    print(f"   测试相关消息数: {len(test_messages)}")
+    print("=" * 50)
     
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=60)
-        
-        print(f"📥 HTTP状态码: {resp.status_code}")
-        print(f"📥 完整返回: {resp.text[:500]}")  # 打印完整返回
-        
         data = resp.json()
         
         if "choices" in data:
             result = data["choices"][0]["message"]["content"]
             print(f"✅ GLM调用成功!")
-            print(f"📥 GLM返回内容:\n{result}")
+            print(f"📥 GLM返回:\n{result}")
             return result
         else:
             print(f"❌ GLM返回错误: {data}")
-            # 如果API失败，返回一个备用文本
-            print("⚠️ 使用备用输出...")
             return None
     except Exception as e:
-        print(f"❌ 调用GLM异常: {e}")
+        print(f"❌ 调用GLM失败: {e}")
         import traceback
         traceback.print_exc()
         return None
