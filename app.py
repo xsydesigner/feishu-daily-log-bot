@@ -386,7 +386,7 @@ def call_glm_summary(messages, requirements, project_name):
 # ============================================================
 
 def append_to_document(document_id, content):
-    """追加内容到云文档（高亮块格式）"""
+    """追加内容到云文档"""
     token = get_tenant_access_token()
     headers = {
         "Authorization": f"Bearer {token}",
@@ -397,63 +397,178 @@ def append_to_document(document_id, content):
     
     create_url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children"
     
-    # 测试不同的高亮块参数
+    # 测试更多高亮块参数格式
     test_payloads = [
-        # 方案1：最简
-        {
-            "children": [{
-                "block_type": 14,
-                "callout": {}
-            }]
-        },
-        # 方案2：指定颜色（数字1-7）
+        # 方案5：使用LarkMd格式的emoji
         {
             "children": [{
                 "block_type": 14,
                 "callout": {
-                    "background_color": 1,
-                    "border_color": 1
+                    "emoji_id": ":bulb:"
                 }
             }]
         },
-        # 方案3：使用emoji短码
+        # 方案6：尝试引用块代替 (block_type=17)
+        {
+            "children": [{
+                "block_type": 17,
+                "quote_container": {}
+            }]
+        },
+        # 方案7：直接创建带内容的高亮块
         {
             "children": [{
                 "block_type": 14,
                 "callout": {
                     "background_color": 1,
                     "border_color": 1,
-                    "emoji_id": "bulb"
+                    "emoji_id": "💡"
                 }
-            }]
+            }],
+            "index": 0
         },
-        # 方案4：只有emoji
+        # 方案8：颜色用字符串
         {
             "children": [{
                 "block_type": 14,
                 "callout": {
-                    "emoji_id": "star"
+                    "background_color": "yellow",
+                    "border_color": "yellow"
                 }
             }]
         }
     ]
     
     for i, payload in enumerate(test_payloads):
-        print(f"\n   测试方案{i+1}:")
+        print(f"\n   测试方案{i+5}:")
         print(f"   请求体: {json.dumps(payload, ensure_ascii=False)}")
         
         resp = requests.post(create_url, headers=headers, json=payload)
         data = resp.json()
         
-        print(f"   响应: {json.dumps(data, ensure_ascii=False)}")
+        print(f"   响应code: {data.get('code')}")
         
         if data.get("code") == 0:
-            print(f"   ✅ 方案{i+1}成功!")
-            callout_id = data.get("data", {}).get("children", [])[0].get("block_id")
-            return callout_id  # 返回成功的高亮块ID
+            print(f"   ✅ 方案{i+5}成功!")
+            children = data.get("data", {}).get("children", [])
+            if children:
+                block_id = children[0].get("block_id")
+                print(f"   block_id: {block_id}")
+                # 成功后继续写入内容
+                return write_content_to_block(document_id, block_id, content, today, headers)
     
-    print("   ❌ 所有方案都失败")
-    return None
+    print("   ❌ 高亮块全部失败，使用引用块格式")
+    return append_with_quote(document_id, content, today, headers)
+
+
+def write_content_to_block(document_id, block_id, content, today, headers):
+    """向块内写入内容"""
+    url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{block_id}/children"
+    
+    lines = content.strip().split("\n")
+    blocks = build_content_blocks(lines, today)
+    
+    resp = requests.post(url, headers=headers, json={"children": blocks})
+    data = resp.json()
+    
+    if data.get("code") == 0:
+        print("   ✅ 内容写入成功")
+        return True
+    else:
+        print(f"   ❌ 内容写入失败: {data.get('code')}")
+        return False
+
+
+def append_with_quote(document_id, content, today, headers):
+    """备用方案：使用引用块 + 普通格式"""
+    url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children"
+    
+    lines = content.strip().split("\n")
+    blocks = []
+    
+    # 使用二级标题作为日期标记
+    blocks.append({
+        "block_type": 4,
+        "heading2": {
+            "elements": [{"text_run": {"content": f"📅 {today}"}}]
+        }
+    })
+    
+    blocks.extend(build_content_blocks(lines, today))
+    
+    # 分隔线
+    blocks.append({
+        "block_type": 22,
+        "divider": {}
+    })
+    
+    resp = requests.post(url, headers=headers, json={"children": blocks})
+    data = resp.json()
+    
+    if data.get("code") == 0:
+        print("   ✅ 文档写入成功（备用格式）")
+        return True
+    else:
+        print(f"   ❌ 写入失败: {data}")
+        return False
+
+
+def build_content_blocks(lines, today):
+    """构建内容块列表"""
+    blocks = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        # 跳过日期行
+        if line.startswith("📅") or line.startswith("💡"):
+            continue
+        if re.match(r"^\d{4}/\d{2}/\d{2}$", line):
+            continue
+        
+        # 标题类（加粗）
+        if (line.startswith("【") and "】" in line):
+            blocks.append({
+                "block_type": 2,
+                "text": {
+                    "elements": [{
+                        "text_run": {
+                            "content": line,
+                            "text_element_style": {"bold": True}
+                        }
+                    }]
+                }
+            })
+        # 有序列表
+        elif re.match(r"^\d+[\.\、]", line):
+            text = re.sub(r"^\d+[\.\、]\s*", "", line)
+            blocks.append({
+                "block_type": 13,
+                "ordered": {
+                    "elements": [{"text_run": {"content": text}}]
+                }
+            })
+        # 无序列表
+        elif line.startswith("•") or line.startswith("-"):
+            text = line.lstrip("•- ").strip()
+            blocks.append({
+                "block_type": 12,
+                "bullet": {
+                    "elements": [{"text_run": {"content": text}}]
+                }
+            })
+        # 普通文本
+        else:
+            blocks.append({
+                "block_type": 2,
+                "text": {
+                    "elements": [{"text_run": {"content": line}}]
+                }
+            })
+    
+    return blocks
 
 # ============================================================
 # 回复消息
