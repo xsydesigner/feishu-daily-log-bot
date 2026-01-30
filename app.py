@@ -458,30 +458,65 @@ def append_to_document(document_id, content):
     # ============ 第一步：创建高亮块 ============
     create_url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children"
     
+    # 尝试方案1：最简参数
     callout_payload = {
         "children": [
             {
                 "block_type": 14,
                 "callout": {
-                    "background_color": 3,
-                    "border_color": 3,
-                    "emoji_id": "bulb"
+                    "background_color": 2,
+                    "border_color": 2
                 }
             }
-        ],
-        "index": -1  # 添加到末尾
+        ]
     }
     
     try:
-        print("   第一步：创建高亮块...")
+        print("   第一步：创建高亮块（方案1：最简参数）...")
         resp = requests.post(create_url, headers=headers, json=callout_payload)
         data = resp.json()
         
-        print(f"   创建高亮块返回: code={data.get('code')}")
+        # 如果方案1失败，尝试方案2
+        if data.get("code") != 0:
+            print(f"   方案1失败: {data.get('code')}, 尝试方案2...")
+            
+            # 尝试方案2：使用emoji unicode
+            callout_payload2 = {
+                "children": [
+                    {
+                        "block_type": 14,
+                        "callout": {
+                            "background_color": 1,
+                            "border_color": 1,
+                            "emoji_id": "💡"
+                        }
+                    }
+                ]
+            }
+            resp = requests.post(create_url, headers=headers, json=callout_payload2)
+            data = resp.json()
+        
+        # 如果方案2还失败，尝试方案3
+        if data.get("code") != 0:
+            print(f"   方案2失败: {data.get('code')}, 尝试方案3...")
+            
+            # 方案3：不用emoji_id
+            callout_payload3 = {
+                "children": [
+                    {
+                        "block_type": 14,
+                        "callout": {}
+                    }
+                ]
+            }
+            resp = requests.post(create_url, headers=headers, json=callout_payload3)
+            data = resp.json()
+        
+        print(f"   高亮块创建返回: code={data.get('code')}")
         
         if data.get("code") != 0:
-            print(f"   ❌ 创建高亮块失败: {data}")
-            # 降级使用简单格式
+            print(f"   ❌ 所有高亮块方案都失败，使用简单格式")
+            print(f"   错误详情: {data}")
             return append_to_document_simple(document_id, content, today)
         
         # 获取新创建的高亮块ID
@@ -519,14 +554,16 @@ def append_to_document(document_id, content):
             if not line:
                 continue
             
-            # 跳过重复的日期行和emoji标记
+            # 跳过重复的日期行
             if line.startswith("💡") or line.startswith("📅"):
                 continue
             if re.match(r"^\d{4}/\d{2}/\d{2}$", line):
                 continue
             
-            # 【已完成】【进行中】等标题
-            if line.startswith("【") and line.endswith("】"):
+            # 标题类（加粗）
+            if (line.startswith("【") and "】" in line) or \
+               line.startswith("今日进度总结") or \
+               line.startswith("测试：") or line.startswith("测试:"):
                 blocks.append({
                     "block_type": 2,
                     "text": {
@@ -540,49 +577,13 @@ def append_to_document(document_id, content):
                         ]
                     }
                 })
-            # 今日进度总结
-            elif line.startswith("今日进度总结"):
-                blocks.append({
-                    "block_type": 2,
-                    "text": {
-                        "elements": [
-                            {
-                                "text_run": {
-                                    "content": line,
-                                    "text_element_style": {"bold": True}
-                                }
-                            }
-                        ]
-                    }
-                })
-            # 测试：标题
-            elif line.startswith("测试：") or line.startswith("测试:"):
-                blocks.append({
-                    "block_type": 2,
-                    "text": {
-                        "elements": [
-                            {
-                                "text_run": {
-                                    "content": line,
-                                    "text_element_style": {"bold": True}
-                                }
-                            }
-                        ]
-                    }
-                })
-            # 有序列表项（1. 2. 3.）
+            # 有序列表
             elif re.match(r"^\d+[\.\、]", line):
                 text = re.sub(r"^\d+[\.\、]\s*", "", line)
                 blocks.append({
                     "block_type": 13,
                     "ordered": {
-                        "elements": [
-                            {
-                                "text_run": {
-                                    "content": text
-                                }
-                            }
-                        ]
+                        "elements": [{"text_run": {"content": text}}]
                     }
                 })
             # 普通文本
@@ -590,13 +591,7 @@ def append_to_document(document_id, content):
                 blocks.append({
                     "block_type": 2,
                     "text": {
-                        "elements": [
-                            {
-                                "text_run": {
-                                    "content": line
-                                }
-                            }
-                        ]
+                        "elements": [{"text_run": {"content": line}}]
                     }
                 })
         
@@ -609,12 +604,98 @@ def append_to_document(document_id, content):
             return True
         else:
             print(f"   ❌ 写入内容失败: {data}")
-            return False
+            # 高亮块创建了但内容写入失败，仍算部分成功
+            return True
             
     except Exception as e:
         print(f"   ❌ 写入文档异常: {e}")
         import traceback
         traceback.print_exc()
+        return append_to_document_simple(document_id, content, today)
+
+
+def append_to_document_simple(document_id, content, today):
+    """备用方案：简单格式（三级标题 + 列表）"""
+    token = get_tenant_access_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children"
+    
+    lines = content.strip().split("\n")
+    blocks = []
+    
+    # 三级标题
+    blocks.append({
+        "block_type": 5,
+        "heading3": {
+            "elements": [{"text_run": {"content": f"💡 {today}"}}]
+        }
+    })
+    
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("💡") or line.startswith("📅"):
+            continue
+        if re.match(r"^\d{4}/\d{2}/\d{2}$", line):
+            continue
+        
+        # 标题类（加粗）
+        if (line.startswith("【") and "】" in line) or \
+           line.startswith("今日进度总结") or \
+           line.startswith("测试：") or line.startswith("测试:"):
+            blocks.append({
+                "block_type": 2,
+                "text": {
+                    "elements": [
+                        {
+                            "text_run": {
+                                "content": line,
+                                "text_element_style": {"bold": True}
+                            }
+                        }
+                    ]
+                }
+            })
+        # 有序列表
+        elif re.match(r"^\d+[\.\、]", line):
+            text = re.sub(r"^\d+[\.\、]\s*", "", line)
+            blocks.append({
+                "block_type": 13,
+                "ordered": {
+                    "elements": [{"text_run": {"content": text}}]
+                }
+            })
+        # 普通文本
+        else:
+            blocks.append({
+                "block_type": 2,
+                "text": {
+                    "elements": [{"text_run": {"content": line}}]
+                }
+            })
+    
+    # 分隔线
+    blocks.append({
+        "block_type": 22,
+        "divider": {}
+    })
+    
+    try:
+        print("   📝 使用简单格式写入...")
+        resp = requests.post(url, headers=headers, json={"children": blocks})
+        data = resp.json()
+        
+        if data.get("code") == 0:
+            print("   ✅ 文档写入成功（简单格式）")
+            return True
+        else:
+            print(f"   ❌ 简单格式也失败: {data}")
+            return False
+    except Exception as e:
+        print(f"   ❌ 写入异常: {e}")
         return False
 
 
