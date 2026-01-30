@@ -25,14 +25,14 @@ GLM_API_KEY = os.environ.get("GLM_API_KEY", "")
 # 多维表格字段名
 FIELD_REQUIREMENT = "需求内容"
 FIELD_STATUS = "验收状态"
-FIELD_OWNER = "负责人"
-FIELD_ROLE = "角色"  # 如果有角色字段
+FIELD_OWNER = "任务执行人"
+FIELD_ROLE = "部门"  # 如果有角色字段
 STATUS_PASSED = "验收通过"
 
 # 项目配置（根据chat_id匹配项目）
 PROJECTS = {
     # JigArt项目
-    "oc_": {
+    "oc_2575222eccd3a75f35d409eaba35ba66": {
         "name": "JigArt",
         "app_token": "Q8BWbvdpja9RzEsFXbjcXEy3nof",
         "table_id": "tbluv9XFW2P6B7sn&view=vewENISqJi",
@@ -191,13 +191,6 @@ def get_accepted_requirements(project):
     token = get_tenant_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
-    # 获取今天日期时间戳
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_ts = int(today.timestamp() * 1000)
-    tomorrow_ts = int((today + timedelta(days=1)).timestamp() * 1000)
-    
-    print(f"   今天时间戳: {today_ts}")
-    
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{project['app_token']}/tables/{project['table_id']}/records/search"
     
     payload = {
@@ -236,22 +229,20 @@ def get_accepted_requirements(project):
                 else:
                     req_name = str(req_name_raw)
                 
-                # 获取时间
-                start_time = fields.get("开始时间")
-                end_time = fields.get("截止时间")
-                
-                # 判断状态：验收通过 = 已完成，其他 = 进行中
-                status = fields.get("验收状态", "")
+                # 判断状态
+                status = fields.get(FIELD_STATUS, "")
                 if isinstance(status, list) and status:
                     status = status[0] if isinstance(status[0], str) else str(status[0])
                 
-                task_status = "已完成" if status == "验收通过" else "进行中"
+                task_status = "已完成" if status == STATUS_PASSED else "进行中"
                 
-                owner = fields.get("任务执行人", "")
-                role = fields.get("部门", "其他")
-                
+                # 获取任务执行人
+                owner = fields.get(FIELD_OWNER, "")
                 if isinstance(owner, list) and owner:
                     owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
+                
+                # 获取部门
+                role = fields.get(FIELD_ROLE, "其他")
                 if isinstance(role, list) and role:
                     role = role[0] if isinstance(role[0], str) else str(role[0])
                 
@@ -262,7 +253,7 @@ def get_accepted_requirements(project):
                     "task_status": task_status
                 })
                 
-                print(f"   ✓ [{task_status}] {req_name[:20]}")
+                print(f"   ✓ [{task_status}] {req_name[:20]}... @{owner} ({role})")
         else:
             print(f"   API错误: {data}")
             
