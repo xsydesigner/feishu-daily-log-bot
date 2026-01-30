@@ -185,35 +185,29 @@ def get_chat_messages(chat_id):
 # ============================================================
 
 def get_accepted_requirements(project):
-    """获取今日相关的需求（开始时间 <= 今日 <= 截止时间）"""
+    """获取今日相关的需求（进行中 + 今日完成）"""
     print("   正在查询多维表格...")
     
     token = get_tenant_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
-    # 获取今天的时间戳（毫秒）
+    # 获取今天日期时间戳
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_ts = int(today.timestamp() * 1000)
     tomorrow_ts = int((today + timedelta(days=1)).timestamp() * 1000)
     
-    print(f"   今天时间戳: {today_ts} ~ {tomorrow_ts}")
+    print(f"   今天时间戳: {today_ts}")
     
     url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{project['app_token']}/tables/{project['table_id']}/records/search"
     
-    # 筛选条件：开始时间 <= 今日 且 截止时间 >= 今日
     payload = {
         "filter": {
             "conjunction": "and",
             "conditions": [
                 {
-                    "field_name": "开始时间",
-                    "operator": "isLessEqual",
-                    "value": [tomorrow_ts - 1]  # 开始时间 <= 今天结束
-                },
-                {
-                    "field_name": "截止时间",
-                    "operator": "isGreaterEqual",
-                    "value": [today_ts]  # 截止时间 >= 今天开始
+                    "field_name": "是否今日任务",
+                    "operator": "is",
+                    "value": ["是"]
                 }
             ]
         },
@@ -230,36 +224,35 @@ def get_accepted_requirements(project):
         
         if data.get("code") == 0:
             items = data.get("data", {}).get("items", [])
-            print(f"   获取到 {len(items)} 条今日需求")
+            print(f"   获取到 {len(items)} 条今日任务")
             
             for item in items:
                 fields = item.get("fields", {})
                 
                 # 处理需求内容
-                req_name_raw = fields.get("需求内容", "")
+                req_name_raw = fields.get(FIELD_REQUIREMENT, "")
                 if isinstance(req_name_raw, list):
                     req_name = "".join([t.get("text", "") for t in req_name_raw if isinstance(t, dict)])
                 else:
                     req_name = str(req_name_raw)
                 
-                # 获取验收状态
-                status = fields.get("验收状态", "")
-                if isinstance(status, list) and status:
-                    status = status[0] if isinstance(status[0], str) else str(status[0])
+                # 获取时间
+                start_time = fields.get("开始时间")
+                end_time = fields.get("截止时间")
                 
-                # 判断任务状态：验收通过 = 已完成，其他 = 进行中
-                if status == "验收通过":
-                    task_status = "已完成"
-                else:
-                    task_status = "进行中"
+                # 判断状态：进行中 or 已完成
+                # 进行中：开始时间 <= 今日，截止时间 > 今日
+                # 已完成：截止时间 <= 今日
+                task_status = "进行中"
+                if end_time and isinstance(end_time, (int, float)):
+                    if end_time < tomorrow_ts:
+                        task_status = "已完成"
                 
-                # 获取任务执行人
                 owner = fields.get("任务执行人", "")
+                role = fields.get("部门", "其他")
+                
                 if isinstance(owner, list) and owner:
                     owner = owner[0].get("name", "") if isinstance(owner[0], dict) else str(owner[0])
-                
-                # 获取部门
-                role = fields.get("部门", "其他")
                 if isinstance(role, list) and role:
                     role = role[0] if isinstance(role[0], str) else str(role[0])
                 
@@ -270,7 +263,7 @@ def get_accepted_requirements(project):
                     "task_status": task_status
                 })
                 
-                print(f"   ✓ [{task_status}] {req_name[:30]}... @{owner}")
+                print(f"   ✓ [{task_status}] {req_name[:20]}")
         else:
             print(f"   API错误: {data}")
             
