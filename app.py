@@ -331,7 +331,7 @@ def call_glm_summary(messages, requirements, project_name):
 【进行中】
 1. 需求名称 @负责人
 
-测试：
+（只有群消息中有测试相关内容时才输出，否则不输出）测试：
 1. 测试进度
 
 输出规则（不要输出这些规则）：
