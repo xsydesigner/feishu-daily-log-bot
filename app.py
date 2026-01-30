@@ -31,7 +31,7 @@ PROJECTS = {
     "oc_2575222eccd3a75f35d409eaba35ba66": {
         "name": "JigArt",
         "app_token": "Q8BWbvdpja9RzEsFXbjcXEy3nof",
-        "table_id": "tbluv9XFW2P6B7sn&view=vewENISqJi",
+        "table_id": "tbluv9XFW2P6B7sn",
         "document_id": "MTHxwrGIfiYjJHkLL4HcsBWOnPh",
         "is_wiki": True
     },
