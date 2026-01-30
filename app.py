@@ -240,13 +240,12 @@ def get_accepted_requirements(project):
                 start_time = fields.get("开始时间")
                 end_time = fields.get("截止时间")
                 
-                # 判断状态：进行中 or 已完成
-                # 进行中：开始时间 <= 今日，截止时间 > 今日
-                # 已完成：截止时间 <= 今日
-                task_status = "进行中"
-                if end_time and isinstance(end_time, (int, float)):
-                    if end_time < tomorrow_ts:
-                        task_status = "已完成"
+                # 判断状态：验收通过 = 已完成，其他 = 进行中
+                status = fields.get("验收状态", "")
+                if isinstance(status, list) and status:
+                    status = status[0] if isinstance(status[0], str) else str(status[0])
+                
+                task_status = "已完成" if status == "验收通过" else "进行中"
                 
                 owner = fields.get("任务执行人", "")
                 role = fields.get("部门", "其他")
@@ -315,33 +314,31 @@ def call_glm_summary(messages, requirements, project_name):
 
 ## 【重要】以下是今日需求列表（来自多维表格，你只能使用这些需求）：
 
-### 已完成的需求：
+### 已完成的需求（验收通过）：
 {completed_text if completed_text else "无"}
 
-### 进行中的需求：
+### 进行中的需求（未验收通过）：
 {in_progress_text if in_progress_text else "无"}
 
-## 今日群消息（仅用于分析上述需求的进度，禁止从中提取新需求）：
+## 今日群消息（用于分析进行中需求的进度）：
 {msg_text if msg_text else "无消息"}
 
 请严格按以下格式输出：
 
-今日进度总结：（1句话概括今日整体进度）
+今日进度总结：（1句话概括）
 
 【已完成】
 1. 需求名称 @负责人
-2. 需求名称 @负责人
 
 【进行中】
-1. 需求名称 @负责人 - 进度描述
-2. 需求名称 @负责人 - 进度描述
+1. 需求名称 @负责人 - 简短进度
 
 测试：
-1. 测试相关进度
+1. 测试进度
 
 ⚠️ 严格要求（必须遵守）：
 1. 【已完成】只能列出上面"已完成的需求"中的内容，不能添加其他内容
-2. 【进行中】只能列出上面"进行中的需求"中的内容，不能添加其他内容
+2. 【进行中】只能列出上面"进行中的需求"中的内容，从群消息中找相关内容总结进度，进度描述要简短
 3. 禁止从群消息中创造或提取新的需求
 4. 群消息仅用于分析已有需求的进度详情
 5. 如果群消息中没有某需求的进度信息，写"进度待更新"
