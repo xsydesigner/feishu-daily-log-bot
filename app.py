@@ -224,17 +224,36 @@ def get_accepted_requirements(project):
 def call_glm_summary(messages, requirements, project_name):
     today = datetime.now().strftime("%Y/%m/%d")
     
-    in_progress = [r for r in requirements if r.get("task_status") == "进行中"]
-    completed = [r for r in requirements if r.get("task_status") == "已完成"]
+    # ========== 代码直接按部门分组需求 ==========
+    departments = {}
+    for r in requirements:
+        role = r.get("role", "其他")
+        if role not in departments:
+            departments[role] = []
+        departments[role].append(r)
     
-    # 构建需求文本（包含状态和部门）
-    all_requirements_text = ""
-    for r in completed:
-        all_requirements_text += f"- 【已完成】{r['name']} @{r['owner']}（部门:{r['role']}）\n"
-    for r in in_progress:
-        all_requirements_text += f"- 【进行中】{r['name']} @{r['owner']}（部门:{r['role']}）\n"
+    # 生成需求列表文本（固定格式，不经过AI）
+    requirements_output = ""
+    dept_order = ["策划", "UI", "开发", "测试", "美术", "运营", "其他"]
     
-    # 群消息
+    for dept in dept_order:
+        if dept in departments:
+            requirements_output += f"{dept}:\n"
+            for i, r in enumerate(departments[dept], 1):
+                status = r.get("task_status", "进行中")
+                requirements_output += f"{i}. 【{status}】{r['name']} @{r['owner']}\n"
+            requirements_output += "\n"
+    
+    # 处理未在预设列表中的部门
+    for dept, reqs in departments.items():
+        if dept not in dept_order:
+            requirements_output += f"{dept}:\n"
+            for i, r in enumerate(reqs, 1):
+                status = r.get("task_status", "进行中")
+                requirements_output += f"{i}. 【{status}】{r['name']} @{r['owner']}\n"
+            requirements_output += "\n"
+    
+    # ========== AI只处理今日要点 ==========
     msg_text = ""
     for m in messages[-50:]:
         if m.get("sender_type") == "机器人":
@@ -245,37 +264,27 @@ def call_glm_summary(messages, requirements, project_name):
                 continue
             msg_text += f"- {text}\n"
     
-    prompt = f"""你是一个产品日志助手。请根据以下信息，生成{project_name}的产品日志。
+    # 如果没有群消息，直接返回需求列表 + 固定的今日要点
+    if not msg_text:
+        return requirements_output.strip() + "\n\n【今日要点】\n• 无"
+    
+    # 只让AI提取今日要点
+    prompt = f"""你是一个产品日志助手。请从以下群消息中提取今日要点。
 
-今日日期：{today}
+## 今日群消息：
+{msg_text}
 
-## 【重要】以下是今日需求列表（来自多维表格）：
-{all_requirements_text if all_requirements_text else "无"}
-
-## 今日群消息（用于提取今日要点）：
-{msg_text if msg_text else "无消息"}
-
-请严格按以下格式输出：
-
-策划:
-1. 【状态】需求名称 @负责人
-
-UI:
-1. 【状态】需求名称 @负责人
-
-开发:
-1. 【状态】需求名称 @负责人
+请只输出【今日要点】部分，格式如下：
 
 【今日要点】
-• 要点内容
+• 重要决策或结论
+• 临时任务
+• 排期变更
 
-输出规则：
-1. 按部门分组输出需求（策划、UI、开发、测试、美术等）
-2. 【已完成】和【进行中】必须原样输出多维表格中的需求，只能按部门重新分组
-3. 每条需求格式：序号. 【进行中/已完成】需求名称 @负责人
-4. 如果某个部门没有需求，则不输出该部门
-5. 【今日要点】从群消息提取重要决策、临时任务、排期变更，无则写"无"
-6. 不要输出这些规则"""
+规则：
+1. 只从群消息中提取重要决策、临时任务、排期变更
+2. 如果没有有价值的信息，输出"• 无"
+3. 只输出【今日要点】部分，不要输出其他内容"""
 
     url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     headers = {"Authorization": f"Bearer {GLM_API_KEY}", "Content-Type": "application/json"}
@@ -286,8 +295,9 @@ UI:
     }
     
     print("=" * 50)
-    print("🤖 调用GLM API")
-    print(f"   进行中: {len(in_progress)}, 已完成: {len(completed)}")
+    print("🤖 调用GLM API（仅提取今日要点）")
+    print(f"   需求数: {len(requirements)}")
+    print(f"   群消息数: {len([m for m in messages if m.get('sender_type') != '机器人'])}")
     print("=" * 50)
     
     try:
@@ -295,15 +305,18 @@ UI:
         data = resp.json()
         
         if "choices" in data:
-            result = data["choices"][0]["message"]["content"]
+            highlights = data["choices"][0]["message"]["content"]
             print(f"✅ GLM调用成功!")
-            return result
+            
+            # 拼接：需求列表（代码生成） + 今日要点（AI生成）
+            final_output = requirements_output.strip() + "\n\n" + highlights.strip()
+            return final_output
         else:
             print(f"❌ GLM返回错误: {data}")
-            return None
+            return requirements_output.strip() + "\n\n【今日要点】\n• 无"
     except Exception as e:
         print(f"❌ 调用GLM失败: {e}")
-        return None
+        return requirements_output.strip() + "\n\n【今日要点】\n• 无"
 
 # ============================================================
 # 写入飞书云文档
