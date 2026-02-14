@@ -214,9 +214,9 @@ def append_to_document(document_id, content, user_map=None):
         "children": [{
             "block_type": 19,
             "callout": {
-                "background_color": 4,  # 黄色背景
-                "border_color": 4,      # 黄色边框
-                "emoji_id": "bulb"      # 💡 灯泡图标
+                "background_color": 4,
+                "border_color": 4,
+                "emoji_id": "bulb"
             }
         }]
     }
@@ -234,26 +234,47 @@ def append_to_document(document_id, content, user_map=None):
             print(f"   ❌ 创建Callout失败: {data}")
             return None
         
-        # 获取 Callout 块的 ID
         callout_id = data["data"]["children"][0]["block_id"]
         print(f"   ✅ Callout创建成功: {callout_id}")
         
-        # ========== 第二步：构建内部内容块 ==========
+        # ========== 第二步：获取 Callout 内的默认子块 ==========
+        resp_children = requests.get(
+            f"{base_url}/{callout_id}/children",
+            headers=headers
+        )
+        children_data = resp_children.json()
+        
+        first_block_id = None
+        if children_data.get("code") == 0:
+            items = children_data.get("data", {}).get("items", [])
+            if items:
+                first_block_id = items[0].get("block_id")
+                print(f"   📝 找到默认块: {first_block_id}")
+        
+        # ========== 第三步：更新默认块为日期 ==========
+        if first_block_id:
+            update_resp = requests.patch(
+                f"{base_url}/{first_block_id}",
+                headers=headers,
+                json={
+                    "update_text_elements": {
+                        "elements": [{
+                            "text_run": {
+                                "content": today,
+                                "text_element_style": {"bold": True}
+                            }
+                        }]
+                    }
+                }
+            )
+            if update_resp.json().get("code") == 0:
+                print(f"   ✅ 日期写入成功")
+            else:
+                print(f"   ⚠️ 更新日期失败: {update_resp.json()}")
+        
+        # ========== 第四步：构建其余内容块 ==========
         lines = content.strip().split("\n")
         inner_blocks = []
-        
-        # 日期 - 使用加粗文本（会和灯泡图标同一行）
-        inner_blocks.append({
-            "block_type": 2,
-            "text": {
-                "elements": [{
-                    "text_run": {
-                        "content": today,
-                        "text_element_style": {"bold": True}
-                    }
-                }]
-            }
-        })
         
         for line in lines:
             line = line.strip()
@@ -264,7 +285,7 @@ def append_to_document(document_id, content, user_map=None):
             if line.startswith("📅") or re.match(r"^\d{4}/\d{2}/\d{2}$", line):
                 continue
             
-            # 部门标题（策划: UI: 开发: 等）
+            # 部门标题
             if re.match(r"^(策划|UI|开发|测试|美术|运营|其他)\s*[:：]", line):
                 inner_blocks.append({
                     "block_type": 2,
@@ -307,21 +328,23 @@ def append_to_document(document_id, content, user_map=None):
                     }
                 })
         
-        # ========== 第三步：向 Callout 内部写入内容 ==========
-        print(f"   📝 写入 {len(inner_blocks)} 个块到Callout...")
-        resp2 = requests.post(
-            f"{base_url}/{callout_id}/children",
-            headers=headers,
-            json={"children": inner_blocks}
-        )
-        data2 = resp2.json()
+        # ========== 第五步：追加其余内容 ==========
+        if inner_blocks:
+            print(f"   📝 写入 {len(inner_blocks)} 个块到Callout...")
+            resp2 = requests.post(
+                f"{base_url}/{callout_id}/children",
+                headers=headers,
+                json={"children": inner_blocks}
+            )
+            data2 = resp2.json()
+            
+            if data2.get("code") == 0:
+                print("   ✅ 文档写入成功")
+            else:
+                print(f"   ❌ 写入内容失败: {data2}")
+                return None
         
-        if data2.get("code") == 0:
-            print("   ✅ 文档写入成功")
-            return callout_id
-        else:
-            print(f"   ❌ 写入内容失败: {data2}")
-            return None
+        return callout_id
             
     except Exception as e:
         print(f"   ❌ 写入异常: {e}")
