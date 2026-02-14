@@ -200,7 +200,9 @@ def generate_requirements_summary(requirements):
 # ============================================================
 
 def append_to_document(document_id, content, user_map=None):
-    """追加内容到云文档（使用Callout高亮块，灯泡图标）"""
+    """追加内容到云文档（使用Callout高亮块，灯泡图标）
+    返回: 成功返回 block_id，失败返回 None
+    """
     token = get_tenant_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
@@ -230,7 +232,7 @@ def append_to_document(document_id, content, user_map=None):
         
         if data.get("code") != 0:
             print(f"   ❌ 创建Callout失败: {data}")
-            return False
+            return None
         
         # 获取 Callout 块的 ID
         callout_id = data["data"]["children"][0]["block_id"]
@@ -240,11 +242,16 @@ def append_to_document(document_id, content, user_map=None):
         lines = content.strip().split("\n")
         inner_blocks = []
         
-        # 日期标题
+        # 日期 - 使用加粗文本（会和灯泡图标同一行）
         inner_blocks.append({
-            "block_type": 4,
-            "heading2": {
-                "elements": [{"text_run": {"content": f"{today}"}}]
+            "block_type": 2,
+            "text": {
+                "elements": [{
+                    "text_run": {
+                        "content": today,
+                        "text_element_style": {"bold": True}
+                    }
+                }]
             }
         })
         
@@ -311,14 +318,14 @@ def append_to_document(document_id, content, user_map=None):
         
         if data2.get("code") == 0:
             print("   ✅ 文档写入成功")
-            return True
+            return callout_id
         else:
             print(f"   ❌ 写入内容失败: {data2}")
-            return False
+            return None
             
     except Exception as e:
         print(f"   ❌ 写入异常: {e}")
-        return False
+        return None
 
 def parse_mention_elements(text, user_map):
     """解析文本，将@人名转换为mention_user元素"""
@@ -414,15 +421,16 @@ def handle_generate_log(message):
         if project.get("is_wiki"):
             document_id = get_wiki_document_id(document_id) or document_id
         
-        # 5. 写入云文档
+        # 5. 写入云文档，获取 block_id
         print("📝 写入云文档...")
-        success = append_to_document(document_id, summary, user_map)
+        block_id = append_to_document(document_id, summary, user_map)
         
-        if success:
+        if block_id:
+            # 构建选区链接（带 block_id 锚点）
             if project.get("is_wiki"):
-                doc_url = f"https://rfc9wxlr7c.feishu.cn/wiki/{project['document_id']}"
+                doc_url = f"https://rfc9wxlr7c.feishu.cn/wiki/{project['document_id']}#{block_id}"
             else:
-                doc_url = f"https://rfc9wxlr7c.feishu.cn/docx/{document_id}"
+                doc_url = f"https://rfc9wxlr7c.feishu.cn/docx/{document_id}#{block_id}"
             
             reply_message(message_id, 
                 f"✅ {project['name']} 产品日志已生成！\n\n"
