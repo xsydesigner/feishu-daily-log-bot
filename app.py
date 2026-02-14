@@ -200,97 +200,125 @@ def generate_requirements_summary(requirements):
 # ============================================================
 
 def append_to_document(document_id, content, user_map=None):
-    """追加内容到云文档（分割线格式，支持@人高亮）"""
+    """追加内容到云文档（使用Callout高亮块，灯泡图标）"""
     token = get_tenant_access_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
     today = datetime.now().strftime("%Y/%m/%d")
-    url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks/{document_id}/children"
+    base_url = f"https://open.feishu.cn/open-apis/docx/v1/documents/{document_id}/blocks"
     
-    lines = content.strip().split("\n")
-    blocks = []
-    
-    # 日期标题
-    blocks.append({
-        "block_type": 4,
-        "heading2": {
-            "elements": [{"text_run": {"content": f"📅 {today}"}}]
-        }
-    })
-    
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        
-        # 跳过日期行
-        if line.startswith("📅") or re.match(r"^\d{4}/\d{2}/\d{2}$", line):
-            continue
-        
-        # 部门标题（策划: UI: 开发: 等）
-        if re.match(r"^(策划|UI|开发|测试|美术|运营|其他)\s*[:：]", line):
-            blocks.append({
-                "block_type": 2,
-                "text": {
-                    "elements": [{
-                        "text_run": {
-                            "content": line,
-                            "text_element_style": {"bold": True}
-                        }
-                    }]
-                }
-            })
-        # 有序列表
-        elif re.match(r"^\d+[\.\、]", line):
-            text = re.sub(r"^\d+[\.\、]\s*", "", line)
-            elements = parse_mention_elements(text, user_map)
-            blocks.append({
-                "block_type": 13,
-                "ordered": {
-                    "elements": elements
-                }
-            })
-        # 无序列表
-        elif line.startswith("•") or line.startswith("-"):
-            text = line.lstrip("•- ").strip()
-            elements = parse_mention_elements(text, user_map)
-            blocks.append({
-                "block_type": 12,
-                "bullet": {
-                    "elements": elements
-                }
-            })
-        # 普通文本
-        else:
-            elements = parse_mention_elements(line, user_map)
-            blocks.append({
-                "block_type": 2,
-                "text": {
-                    "elements": elements
-                }
-            })
-    
-    # 分割线
-    blocks.append({
-        "block_type": 22,
-        "divider": {}
-    })
+    # ========== 第一步：创建 Callout 容器块 ==========
+    callout_request = {
+        "children": [{
+            "block_type": 19,
+            "callout": {
+                "background_color": 4,  # 黄色背景
+                "border_color": 4,      # 黄色边框
+                "emoji_id": "bulb"      # 💡 灯泡图标
+            }
+        }]
+    }
     
     try:
-        print(f"   📝 写入 {len(blocks)} 个块...")
-        resp = requests.post(url, headers=headers, json={"children": blocks})
+        print(f"   📦 创建Callout高亮块...")
+        resp = requests.post(
+            f"{base_url}/{document_id}/children",
+            headers=headers,
+            json=callout_request
+        )
         data = resp.json()
         
-        if data.get("code") == 0:
+        if data.get("code") != 0:
+            print(f"   ❌ 创建Callout失败: {data}")
+            return False
+        
+        # 获取 Callout 块的 ID
+        callout_id = data["data"]["children"][0]["block_id"]
+        print(f"   ✅ Callout创建成功: {callout_id}")
+        
+        # ========== 第二步：构建内部内容块 ==========
+        lines = content.strip().split("\n")
+        inner_blocks = []
+        
+        # 日期标题
+        inner_blocks.append({
+            "block_type": 4,
+            "heading2": {
+                "elements": [{"text_run": {"content": f"{today}"}}]
+            }
+        })
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 跳过日期行
+            if line.startswith("📅") or re.match(r"^\d{4}/\d{2}/\d{2}$", line):
+                continue
+            
+            # 部门标题（策划: UI: 开发: 等）
+            if re.match(r"^(策划|UI|开发|测试|美术|运营|其他)\s*[:：]", line):
+                inner_blocks.append({
+                    "block_type": 2,
+                    "text": {
+                        "elements": [{
+                            "text_run": {
+                                "content": line,
+                                "text_element_style": {"bold": True}
+                            }
+                        }]
+                    }
+                })
+            # 有序列表
+            elif re.match(r"^\d+[\.\、]", line):
+                text = re.sub(r"^\d+[\.\、]\s*", "", line)
+                elements = parse_mention_elements(text, user_map)
+                inner_blocks.append({
+                    "block_type": 13,
+                    "ordered": {
+                        "elements": elements
+                    }
+                })
+            # 无序列表
+            elif line.startswith("•") or line.startswith("-"):
+                text = line.lstrip("•- ").strip()
+                elements = parse_mention_elements(text, user_map)
+                inner_blocks.append({
+                    "block_type": 12,
+                    "bullet": {
+                        "elements": elements
+                    }
+                })
+            # 普通文本
+            else:
+                elements = parse_mention_elements(line, user_map)
+                inner_blocks.append({
+                    "block_type": 2,
+                    "text": {
+                        "elements": elements
+                    }
+                })
+        
+        # ========== 第三步：向 Callout 内部写入内容 ==========
+        print(f"   📝 写入 {len(inner_blocks)} 个块到Callout...")
+        resp2 = requests.post(
+            f"{base_url}/{callout_id}/children",
+            headers=headers,
+            json={"children": inner_blocks}
+        )
+        data2 = resp2.json()
+        
+        if data2.get("code") == 0:
             print("   ✅ 文档写入成功")
             return True
         else:
-            print(f"   ❌ 写入失败: {data}")
+            print(f"   ❌ 写入内容失败: {data2}")
             return False
+            
     except Exception as e:
         print(f"   ❌ 写入异常: {e}")
         return False
-
 
 def parse_mention_elements(text, user_map):
     """解析文本，将@人名转换为mention_user元素"""
