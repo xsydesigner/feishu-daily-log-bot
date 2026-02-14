@@ -17,7 +17,6 @@ app = Flask(__name__)
 
 APP_ID = os.environ.get("APP_ID", "")
 APP_SECRET = os.environ.get("APP_SECRET", "")
-GLM_API_KEY = os.environ.get("GLM_API_KEY", "")
 
 # 多维表格字段名
 FIELD_REQUIREMENT = "需求内容"
@@ -78,65 +77,6 @@ def get_wiki_document_id(wiki_token):
         return None
 
 # ============================================================
-# 读取群消息
-# ============================================================
-
-def get_chat_messages(chat_id):
-    print(f"   正在获取群消息, chat_id: {chat_id}")
-    
-    token = get_tenant_access_token()
-    headers = {"Authorization": f"Bearer {token}"}
-    
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    start_time = str(int(today.timestamp()))
-    
-    url = f"https://open.feishu.cn/open-apis/im/v1/messages"
-    params = {
-        "container_id_type": "chat",
-        "container_id": chat_id,
-        "start_time": start_time,
-        "page_size": 50
-    }
-    
-    messages = []
-    try:
-        resp = requests.get(url, headers=headers, params=params)
-        data = resp.json()
-        
-        if data.get("code") == 0:
-            items = data.get("data", {}).get("items", [])
-            for item in items:
-                msg_type = item.get("msg_type", "")
-                sender = item.get("sender", {})
-                sender_type = sender.get("sender_type", "user")
-                
-                body = item.get("body", {})
-                content_str = body.get("content", "{}")
-                
-                text = ""
-                try:
-                    content = json.loads(content_str)
-                    if msg_type == "text":
-                        text = content.get("text", "")
-                    elif msg_type == "post":
-                        text = f"[富文本]{content.get('title', '')}"
-                    else:
-                        text = f"[{msg_type}]"
-                except:
-                    text = f"[{msg_type}]"
-                
-                messages.append({
-                    "sender_type": "机器人" if sender_type == "app" else "用户",
-                    "msg_type": msg_type,
-                    "text": text
-                })
-            print(f"   获取到 {len(messages)} 条消息")
-    except Exception as e:
-        print(f"   获取消息异常: {e}")
-    
-    return messages
-
-# ============================================================
 # 读取多维表格需求
 # ============================================================
 
@@ -193,7 +133,7 @@ def get_accepted_requirements(project):
                 if isinstance(owner_raw, list) and owner_raw:
                     if isinstance(owner_raw[0], dict):
                         owner_name = owner_raw[0].get("name", "")
-                        owner_id = owner_raw[0].get("id", "")  # 获取user_id
+                        owner_id = owner_raw[0].get("id", "")
                     else:
                         owner_name = str(owner_raw[0])
                 
@@ -205,7 +145,7 @@ def get_accepted_requirements(project):
                 requirements.append({
                     "name": req_name,
                     "owner": owner_name,
-                    "owner_id": owner_id,  # 新增：用户ID
+                    "owner_id": owner_id,
                     "role": str(role),
                     "task_status": task_status
                 })
@@ -218,13 +158,13 @@ def get_accepted_requirements(project):
     return requirements
 
 # ============================================================
-# 调用GLM生成总结
+# 生成需求列表（纯代码，不调用AI）
 # ============================================================
 
-def call_glm_summary(messages, requirements, project_name):
-    today = datetime.now().strftime("%Y/%m/%d")
+def generate_requirements_summary(requirements):
+    """直接按部门分组生成需求列表"""
     
-    # ========== 代码直接按部门分组需求 ==========
+    # 按部门分组
     departments = {}
     for r in requirements:
         role = r.get("role", "其他")
@@ -232,91 +172,28 @@ def call_glm_summary(messages, requirements, project_name):
             departments[role] = []
         departments[role].append(r)
     
-    # 生成需求列表文本（固定格式，不经过AI）
-    requirements_output = ""
+    # 生成输出文本
+    output = ""
     dept_order = ["策划", "UI", "开发", "测试", "美术", "运营", "其他"]
     
     for dept in dept_order:
         if dept in departments:
-            requirements_output += f"{dept}:\n"
+            output += f"{dept}:\n"
             for i, r in enumerate(departments[dept], 1):
                 status = r.get("task_status", "进行中")
-                requirements_output += f"{i}. 【{status}】{r['name']} @{r['owner']}\n"
-            requirements_output += "\n"
+                output += f"{i}. 【{status}】{r['name']} @{r['owner']}\n"
+            output += "\n"
     
     # 处理未在预设列表中的部门
     for dept, reqs in departments.items():
         if dept not in dept_order:
-            requirements_output += f"{dept}:\n"
+            output += f"{dept}:\n"
             for i, r in enumerate(reqs, 1):
                 status = r.get("task_status", "进行中")
-                requirements_output += f"{i}. 【{status}】{r['name']} @{r['owner']}\n"
-            requirements_output += "\n"
+                output += f"{i}. 【{status}】{r['name']} @{r['owner']}\n"
+            output += "\n"
     
-    # ========== AI只处理今日要点 ==========
-    msg_text = ""
-    for m in messages[-50:]:
-        if m.get("sender_type") == "机器人":
-            continue
-        text = m.get("text", "")
-        if text and len(text) > 5:
-            if "产品日志" in text or "正在生成" in text:
-                continue
-            msg_text += f"- {text}\n"
-    
-    # 如果没有群消息，直接返回需求列表 + 固定的今日要点
-    if not msg_text:
-        return requirements_output.strip() + "\n\n【今日要点】\n• 无"
-    
-    # 只让AI提取今日要点
-    prompt = f"""你是一个产品日志助手。请从以下群消息中提取今日要点。
-
-## 今日群消息：
-{msg_text}
-
-请只输出【今日要点】部分，格式如下：
-
-【今日要点】
-• 重要决策或结论
-• 临时任务
-• 排期变更
-
-规则：
-1. 只从群消息中提取重要决策、临时任务、排期变更
-2. 如果没有有价值的信息，输出"• 无"
-3. 只输出【今日要点】部分，不要输出其他内容"""
-
-    url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-    headers = {"Authorization": f"Bearer {GLM_API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": "glm-4-flash",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3
-    }
-    
-    print("=" * 50)
-    print("🤖 调用GLM API（仅提取今日要点）")
-    print(f"   需求数: {len(requirements)}")
-    print(f"   群消息数: {len([m for m in messages if m.get('sender_type') != '机器人'])}")
-    print("=" * 50)
-    
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=60)
-        data = resp.json()
-        
-        if "choices" in data:
-            highlights = data["choices"][0]["message"]["content"]
-            print(f"✅ GLM调用成功!")
-            
-            # 拼接：需求列表（代码生成） + 今日要点（AI生成）
-            final_output = requirements_output.strip() + "\n\n" + highlights.strip()
-            return final_output
-        else:
-            print(f"❌ GLM返回错误: {data}")
-            return requirements_output.strip() + "\n\n【今日要点】\n• 无"
-    except Exception as e:
-        print(f"❌ 调用GLM失败: {e}")
-        return requirements_output.strip() + "\n\n【今日要点】\n• 无"
+    return output.strip()
 
 # ============================================================
 # 写入飞书云文档
@@ -352,19 +229,6 @@ def append_to_document(document_id, content, user_map=None):
         
         # 部门标题（策划: UI: 开发: 等）
         if re.match(r"^(策划|UI|开发|测试|美术|运营|其他)\s*[:：]", line):
-            blocks.append({
-                "block_type": 2,
-                "text": {
-                    "elements": [{
-                        "text_run": {
-                            "content": line,
-                            "text_element_style": {"bold": True}
-                        }
-                    }]
-                }
-            })
-        # 【今日要点】等
-        elif line.startswith("【") and "】" in line:
             blocks.append({
                 "block_type": 2,
                 "text": {
@@ -434,12 +298,10 @@ def parse_mention_elements(text, user_map):
         return [{"text_run": {"content": text}}]
     
     elements = []
-    # 匹配 @人名（人名可能包含中文、英文、数字）
     pattern = r'@([^\s@]+)'
     last_end = 0
     
     for match in re.finditer(pattern, text):
-        # 添加@前面的文本
         if match.start() > last_end:
             elements.append({"text_run": {"content": text[last_end:match.start()]}})
         
@@ -447,23 +309,19 @@ def parse_mention_elements(text, user_map):
         user_id = user_map.get(name)
         
         if user_id:
-            # 有user_id，使用mention_user实现高亮
             elements.append({
                 "mention_user": {
                     "user_id": user_id
                 }
             })
         else:
-            # 没有找到user_id，保持原文本
             elements.append({"text_run": {"content": match.group(0)}})
         
         last_end = match.end()
     
-    # 添加最后剩余的文本
     if last_end < len(text):
         elements.append({"text_run": {"content": text[last_end:]}})
     
-    # 如果没有匹配到任何内容
     if not elements:
         elements = [{"text_run": {"content": text}}]
     
@@ -504,35 +362,31 @@ def handle_generate_log(message):
         return
     
     try:
-        # 1. 获取群消息
-        print("📨 获取群消息...")
-        messages = get_chat_messages(chat_id)
-        
-        # 2. 获取今日需求
+        # 1. 获取今日需求
         print("📋 获取今日需求...")
         requirements = get_accepted_requirements(project)
         
-        # 3. 构建用户映射表（名字 -> user_id）
+        if not requirements:
+            reply_message(message_id, "📭 今日暂无需求")
+            return
+        
+        # 2. 构建用户映射表（名字 -> user_id）
         user_map = {}
         for r in requirements:
             if r.get("owner") and r.get("owner_id"):
                 user_map[r["owner"]] = r["owner_id"]
         print(f"   用户映射: {list(user_map.keys())}")
         
-        # 4. 调用GLM生成总结
-        print("🤖 调用GLM生成总结...")
-        summary = call_glm_summary(messages, requirements, project["name"])
+        # 3. 生成需求列表（代码直接生成）
+        print("📝 生成需求列表...")
+        summary = generate_requirements_summary(requirements)
         
-        if not summary:
-            reply_message(message_id, "❌ AI总结生成失败，请重试")
-            return
-        
-        # 5. 获取document_id
+        # 4. 获取document_id
         document_id = project["document_id"]
         if project.get("is_wiki"):
             document_id = get_wiki_document_id(document_id) or document_id
         
-        # 6. 写入云文档（传入user_map实现@高亮）
+        # 5. 写入云文档
         print("📝 写入云文档...")
         success = append_to_document(document_id, summary, user_map)
         
@@ -542,24 +396,17 @@ def handle_generate_log(message):
             else:
                 doc_url = f"https://rfc9wxlr7c.feishu.cn/docx/{document_id}"
             
-            # 回复消息不带@高亮，直接文本
             reply_message(message_id, 
                 f"✅ {project['name']} 产品日志已生成！\n\n"
-                f"📊 数据来源：\n"
-                f"   • 群消息：{len(messages)} 条\n"
-                f"   • 今日需求：{len(requirements)} 条\n\n"
-                f"📝 生成内容：\n"
-                f"━━━━━━━━━━━━━━━━\n"
-                f"{summary}\n"
-                f"━━━━━━━━━━━━━━━━\n\n"
+                f"📊 今日需求：{len(requirements)} 条\n\n"
                 f"📄 查看文档：{doc_url}")
         else:
-            reply_message(message_id, f"⚠️ 日志生成完成，但写入文档失败\n\n{summary}")
+            reply_message(message_id, "⚠️ 日志生成完成，但写入文档失败")
         
     except Exception as e:
         print(f"❌ 处理失败: {e}")
         reply_message(message_id, f"❌ 生成失败：{str(e)}")
-        
+
 # ============================================================
 # Webhook路由
 # ============================================================
